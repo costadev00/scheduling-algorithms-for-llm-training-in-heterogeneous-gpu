@@ -63,6 +63,24 @@ python -m peft.peft --report \
 	-t peft/test/canonicalgraph_task_exe_time.csv
 ```
 
+Run metrics and chart together:
+
+- HEFT (report + Gantt):
+```
+python -m heft.heft --report --showGantt \
+	-d heft/test/canonicalgraph_task_connectivity.csv \
+	-p heft/test/canonicalgraph_resource_BW.csv \
+	-t heft/test/canonicalgraph_task_exe_time.csv
+```
+
+- PEFT (report + Gantt):
+```
+python -m peft.peft --report --showGantt \
+	-d peft/test/canonicalgraph_task_connectivity.csv \
+	-p peft/test/canonicalgraph_resource_BW.csv \
+	-t peft/test/canonicalgraph_task_exe_time.csv
+```
+
 ## HEFT EDP modes (optional)
 
 HEFT also supports energy–delay product objectives with `--op_mode "EDP RELATIVE"` or `"EDP ABSOLUTE"`. These require a power CSV:
