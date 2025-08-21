@@ -2,11 +2,19 @@
 
 from collections import deque, namedtuple
 from math import inf
-from heft.gantt import showGanttChart
+try:
+    from .gantt import showGanttChart
+except Exception:
+    try:
+        from heft.gantt import showGanttChart
+    except Exception:
+        # Last resort: import sibling when running as a plain script
+        from gantt import showGanttChart
 from types import SimpleNamespace
 from enum import Enum
 
 import argparse
+import os
 import logging
 import sys
 import numpy as np
@@ -488,22 +496,31 @@ def readDagMatrix(dag_file, show_dag=False):
     )
 
     if show_dag:
-        nx.draw(dag, pos=nx.nx_pydot.graphviz_layout(dag, prog='dot'), with_labels=True)
+        try:
+            # Prefer Graphviz layout for clear DAG visualization if available
+            pos = nx.nx_pydot.graphviz_layout(dag, prog='dot')
+        except Exception as e:
+            # Fall back gracefully when Graphviz (dot) or pydot is missing
+            logger.warning(f"Graphviz 'dot' layout unavailable ({e}). Falling back to spring layout. Install Graphviz and ensure 'dot' is on PATH to use --showDAG with graphviz layout.")
+            pos = nx.spring_layout(dag, seed=42)
+        nx.draw(dag, pos=pos, with_labels=True)
         plt.show()
 
     return dag
 
 def generate_argparser():
+    # Resolve the repo-level 'graphs' directory relative to this file so defaults work from any CWD
+    data_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'graphs'))
     parser = argparse.ArgumentParser(description="A tool for finding HEFT schedules for given DAG task graphs")
     parser.add_argument("-d", "--dag_file", 
                         help="File containing input DAG to be scheduled. Uses default 10 node dag from Topcuoglu 2002 if none given.", 
-                        type=str, default="test/canonicalgraph_task_connectivity.csv")
+                        type=str, default=os.path.join(data_root, "canonicalgraph_task_connectivity.csv"))
     parser.add_argument("-p", "--pe_connectivity_file", 
                         help="File containing connectivity/bandwidth information about PEs. Uses a default 3x3 matrix from Topcuoglu 2002 if none given. If communication startup costs (L) are needed, a \"Startup\" row can be used as the last CSV row", 
-                        type=str, default="test/canonicalgraph_resource_BW.csv")
+                        type=str, default=os.path.join(data_root, "canonicalgraph_resource_BW.csv"))
     parser.add_argument("-t", "--task_execution_file", 
                         help="File containing execution times of each task on each particular PE. Uses a default 10x3 matrix from Topcuoglu 2002 if none given.", 
-                        type=str, default="test/canonicalgraph_task_exe_time.csv")
+                        type=str, default=os.path.join(data_root, "canonicalgraph_task_exe_time.csv"))
     parser.add_argument("-l", "--loglevel", 
                         help="The log level to be used in this module. Default: INFO", 
                         type=str, default="INFO", dest="loglevel", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])

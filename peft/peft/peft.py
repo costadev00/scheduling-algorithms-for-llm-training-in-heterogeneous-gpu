@@ -2,10 +2,17 @@
 
 from collections import deque, namedtuple
 from math import inf
-from peft.gantt import showGanttChart
+try:
+    from .gantt import showGanttChart
+except Exception:
+    try:
+        from peft.gantt import showGanttChart
+    except Exception:
+        from gantt import showGanttChart
 from types import SimpleNamespace
 
 import argparse
+import os
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
@@ -369,22 +376,28 @@ def readDagMatrix(dag_file, show_dag=False):
     )
 
     if show_dag:
-        nx.draw(dag, pos=nx.nx_pydot.graphviz_layout(dag, prog='dot'), with_labels=True)
+        try:
+            pos = nx.nx_pydot.graphviz_layout(dag, prog='dot')
+        except Exception as e:
+            logger.warning(f"Graphviz 'dot' layout unavailable ({e}). Falling back to spring layout. Install Graphviz and ensure 'dot' is on PATH to use --showDAG with graphviz layout.")
+            pos = nx.spring_layout(dag, seed=42)
+        nx.draw(dag, pos=pos, with_labels=True)
         plt.show()
 
     return dag
 
 def generate_argparser():
+    data_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'graphs'))
     parser = argparse.ArgumentParser(description="A tool for finding PEFT schedules for given DAG task graphs")
     parser.add_argument("-d", "--dag_file", 
                         help="File containing input DAG to be scheduled. Uses default 10 node dag from Arabnejad 2014 if none given.",
-                        type=str, default="test/peftgraph_task_connectivity.csv")
+                        type=str, default=os.path.join(data_root, "peftgraph_task_connectivity.csv"))
     parser.add_argument("-p", "--pe_connectivity_file", 
                         help="File containing connectivity/bandwidth information about PEs. Uses a default 3x3 matrix from Arabnejad 2014 if none given.",
-                        type=str, default="test/peftgraph_resource_BW.csv")
+                        type=str, default=os.path.join(data_root, "peftgraph_resource_BW.csv"))
     parser.add_argument("-t", "--task_execution_file", 
                         help="File containing execution times of each task on each particular PE. Uses a default 10x3 matrix from Arabnejad 2014 if none given.",
-                        type=str, default="test/peftgraph_task_exe_time.csv")
+                        type=str, default=os.path.join(data_root, "peftgraph_task_exe_time.csv"))
     parser.add_argument("-l", "--loglevel", 
                         help="The log level to be used in this module. Default: INFO", 
                         type=str, default="INFO", dest="loglevel", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
