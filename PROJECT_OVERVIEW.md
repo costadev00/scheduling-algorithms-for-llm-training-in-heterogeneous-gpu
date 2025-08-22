@@ -70,12 +70,18 @@ python -m peft.peft -d ..\graphs\peftgraph_task_connectivity.csv -t ..\graphs\pe
 (Use absolute paths if preferred; omit `--showDAG` if Graphviz not installed—spring layout fallback will still plot.)
 
 ## 7. Metrics (Lean Set)
-Current report output (simplified):
-- Makespan: Wall clock completion time (max finish over all processors).
-- Load Balance Ratio: makespan / average busy time (1.0 is perfect; higher means imbalance).
-- Energy Cost (optional): Sum over scheduled tasks of (task duration × task_power for chosen processor) when a power file is supplied (HEFT only right now).
+Reported with `--report`:
+- Makespan: Max finish time across all processors.
+- Load Balance Ratio: makespan / average busy time (1.0 ideal; >1 means imbalance).
+- Energy Cost (optional): Sum over tasks of (duration × task_power on the selected processor) when `--power_file` is provided (supported in both HEFT and PEFT).
 
-Background (internal algorithm concepts not printed): Rank‑U (HEFT), OCT (PEFT), EFT (placement). These remain in code but are not part of the lean report.
+Internal concepts (not printed): Rank‑U (HEFT ranking), OCT (PEFT ranking), EFT (placement). They drive scheduling but are hidden to keep the report minimal.
+
+Optional power usage example:
+```powershell
+python -m heft.heft -d ..\graphs\canonicalgraph_task_connectivity.csv -t ..\graphs\canonicalgraph_task_exe_time.csv -p ..\graphs\canonicalgraph_resource_BW.csv --power_file ..\graphs\canonicalgraph_task_power.csv --report
+python -m peft.peft -d ..\graphs\peftgraph_task_connectivity.csv -t ..\graphs\peftgraph_task_exe_time.csv -p ..\graphs\peftgraph_resource_BW.csv --power_file ..\graphs\peftgraph_task_power.csv --report
+```
 
 ## 8. Visualization
 Flags:
