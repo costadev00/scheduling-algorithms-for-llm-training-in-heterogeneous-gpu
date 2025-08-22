@@ -434,10 +434,10 @@ if __name__ == "__main__":
         logger.info(f"Processor {proc} has the following jobs:")
         logger.info(f"\t{jobs}")
     if args.report:
-    makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
-    per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
-    avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
-    load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
+        makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
+        per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
+        avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
+        load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
 
     logger.info("")
     logger.info(f"Makespan: {makespan}")
