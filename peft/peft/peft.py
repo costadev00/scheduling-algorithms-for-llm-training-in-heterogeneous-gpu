@@ -434,18 +434,13 @@ if __name__ == "__main__":
         logger.info(f"Processor {proc} has the following jobs:")
         logger.info(f"\t{jobs}")
     if args.report:
-        makespan, total_idle, per_proc_idle = _compute_makespan_and_idle(processor_schedules)
-        per_proc_busy, lb_cv, lb_imbalance, lb_fairness = _compute_load_balance(processor_schedules)
-        logger.info("")
-        logger.info(f"Makespan: {makespan}")
-        logger.info(f"Total idle time (sum over processors within [0, makespan]): {total_idle}")
-        for proc, idle in sorted(per_proc_idle.items()):
-            logger.info(f"  Idle time on processor {proc}: {idle}")
-        logger.info("Load Balancing:")
-        for proc, busy in sorted(per_proc_busy.items()):
-            logger.info(f"  Busy time on processor {proc}: {busy}")
-        logger.info(f"  Coefficient of variation (busy): {lb_cv}")
-        logger.info(f"  Imbalance ratio (max/min busy): {lb_imbalance}")
-        logger.info(f"  Jain's fairness index: {lb_fairness}")
+    makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
+    per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
+    avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
+    load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
+
+    logger.info("")
+    logger.info(f"Makespan: {makespan}")
+    logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
     if args.showGantt:
         showGanttChart(processor_schedules)

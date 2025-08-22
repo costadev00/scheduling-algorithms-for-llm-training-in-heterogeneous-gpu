@@ -69,22 +69,13 @@ python -m peft.peft -d ..\graphs\peftgraph_task_connectivity.csv -t ..\graphs\pe
 ```
 (Use absolute paths if preferred; omit `--showDAG` if Graphviz not installed—spring layout fallback will still plot.)
 
-## 7. Metrics Glossary
-Produced with `--report` (both algorithms).
-- Makespan: Max task finish time.
-- Total Idle Time: Sum over processors of gaps within [0, makespan].
-- Per‑Processor Idle: Individual idle durations.
-- Busy Time: Makespan − idle for each processor.
-- Coefficient of Variation (Busy): std(busy)/mean(busy) → dispersion of load.
-- Imbalance Ratio: max(busy)/min(busy) (lower is better, ≥1).
-- Jain Fairness Index: (Σ busy)^2 / (n·Σ busy^2) ∈ (0,1]; closer to 1 = fairer.
-- Rank‑U: Upward rank used by HEFT (avg comp + avg successor comm + successor ranks).
-- OCT (Optimistic Cost Table): PEFT optimistic lower bound of future completion; drives its ordering.
-- EFT (Earliest Finish Time): Placement criterion for each candidate processor.
+## 7. Metrics (Lean Set)
+Current report output (simplified):
+- Makespan: Wall clock completion time (max finish over all processors).
+- Load Balance Ratio: makespan / average busy time (1.0 is perfect; higher means imbalance).
+- Energy Cost (optional): Sum over scheduled tasks of (task duration × task_power for chosen processor) when a power file is supplied (HEFT only right now).
 
-(Planned / Optional)
-- Energy: Σ (task power × duration) when power file provided.
-- EDP: Energy × Makespan (absolute or normalized variants).
+Background (internal algorithm concepts not printed): Rank‑U (HEFT), OCT (PEFT), EFT (placement). These remain in code but are not part of the lean report.
 
 ## 8. Visualization
 Flags:

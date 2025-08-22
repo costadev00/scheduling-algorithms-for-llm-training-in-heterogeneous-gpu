@@ -591,19 +591,36 @@ if __name__ == "__main__":
         logger.info(f"Processor {proc} has the following jobs:")
         logger.info(f"\t{jobs}")
     if args.report:
-        makespan, total_idle, per_proc_idle = _compute_makespan_and_idle(processor_schedules)
-        per_proc_busy, lb_cv, lb_imbalance, lb_fairness = _compute_load_balance(processor_schedules)
+        # Simplified reporting: Makespan, Load Balance ratio, Energy (if power file provided)
+        makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
+        per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
+        avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
+        load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
+
+        # Energy cost (sum over tasks of duration * power(task,proc)) if power_dict present
+        energy_cost = None
+        if power_dict is not None:
+            energy = 0.0
+            for proc, jobs in processor_schedules.items():
+                for job in jobs:
+                    duration = float(job.end) - float(job.start)
+                    if duration <= 0:
+                        continue
+                    # Tasks are indexed directly in power_dict by task id
+                    if job.task in power_dict:
+                        # power_dict[job.task] is a row (array) of per-processor power; use the processor actually chosen
+                        try:
+                            task_power = float(power_dict[job.task][job.proc])
+                        except Exception:
+                            task_power = 0.0
+                        energy += duration * task_power
+            energy_cost = energy
+
         logger.info("")
         logger.info(f"Makespan: {makespan}")
-        logger.info(f"Total idle time (sum over processors within [0, makespan]): {total_idle}")
-        for proc, idle in sorted(per_proc_idle.items()):
-            logger.info(f"  Idle time on processor {proc}: {idle}")
-        logger.info("Load Balancing:")
-        for proc, busy in sorted(per_proc_busy.items()):
-            logger.info(f"  Busy time on processor {proc}: {busy}")
-        logger.info(f"  Coefficient of variation (busy): {lb_cv}")
-        logger.info(f"  Imbalance ratio (max/min busy): {lb_imbalance}")
-        logger.info(f"  Jain's fairness index: {lb_fairness}")
+        logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
+        if energy_cost is not None:
+            logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
 
     if args.showGantt:
         showGanttChart(processor_schedules)
