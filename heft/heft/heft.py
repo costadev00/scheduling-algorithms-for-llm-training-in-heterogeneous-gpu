@@ -451,6 +451,33 @@ def _compute_load_balance(proc_schedules):
 
     return per_proc_busy, cv, imbalance_ratio, fairness
 
+def _compute_communication_cost(dag, proc_schedules, communication_matrix, communication_startup):
+    """Compute total realized communication time based on the schedule.
+    For each edge (u,v): if tasks placed on different processors, cost = data_size / bandwidth + startup.
+    Startup taken from source processor (HEFT convention)."""
+    # Build quick lookup: task -> (proc, start, end)
+    task_map = {}
+    for proc, jobs in proc_schedules.items():
+        for job in jobs:
+            task_map[job.task] = job
+    total_comm = 0.0
+    for u, v in dag.edges():
+        if u not in task_map or v not in task_map:
+            continue
+        pu = task_map[u].proc
+        pv = task_map[v].proc
+        if pu == pv:
+            continue
+        bw = communication_matrix[pu, pv]
+        if bw <= 0:
+            continue  # avoid division by zero; treat as no comm time
+        try:
+            data_size = float(dag.get_edge_data(u, v)['weight'])
+        except Exception:
+            data_size = 0.0
+        total_comm += data_size / bw + communication_startup[pu]
+    return total_comm
+
 def readCsvToNumpyMatrix(csv_file):
     """
     Given an input file consisting of a comma separated list of numeric values with a single header row and header column, 
@@ -591,11 +618,12 @@ if __name__ == "__main__":
         logger.info(f"Processor {proc} has the following jobs:")
         logger.info(f"\t{jobs}")
     if args.report:
-        # Simplified reporting: Makespan, Load Balance ratio, Energy (if power file provided)
+        # Simplified reporting: Makespan, Load Balance ratio, Communication Cost, Energy (if power file provided)
         makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
         per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
         avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
         load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
+        communication_cost = _compute_communication_cost(dag, processor_schedules, communication_matrix, communication_startup)
 
         # Energy cost (sum over tasks of duration * power(task,proc)) if power_dict present
         energy_cost = None
@@ -606,9 +634,7 @@ if __name__ == "__main__":
                     duration = float(job.end) - float(job.start)
                     if duration <= 0:
                         continue
-                    # Tasks are indexed directly in power_dict by task id
                     if job.task in power_dict:
-                        # power_dict[job.task] is a row (array) of per-processor power; use the processor actually chosen
                         try:
                             task_power = float(power_dict[job.task][job.proc])
                         except Exception:
@@ -619,6 +645,7 @@ if __name__ == "__main__":
         logger.info("")
         logger.info(f"Makespan: {makespan}")
         logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
+        logger.info(f"Communication Cost (sum transfer times): {communication_cost}")
         if energy_cost is not None:
             logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
 

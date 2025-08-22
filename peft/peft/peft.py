@@ -331,6 +331,32 @@ def _compute_load_balance(proc_schedules):
 
     return per_proc_busy, cv, imbalance_ratio, fairness
 
+def _compute_communication_cost(dag, proc_schedules, communication_matrix):
+    """Compute total realized communication time based on schedule for PEFT.
+    For each edge (u,v) placed on different processors: data_size / bandwidth.
+    (No startup vector in PEFT; can be extended if added later.)"""
+    task_map = {}
+    for proc, jobs in proc_schedules.items():
+        for job in jobs:
+            task_map[job.task] = job
+    total_comm = 0.0
+    for u, v in dag.edges():
+        if u not in task_map or v not in task_map:
+            continue
+        pu = task_map[u].proc
+        pv = task_map[v].proc
+        if pu == pv:
+            continue
+        bw = communication_matrix[pu, pv]
+        if bw <= 0:
+            continue
+        try:
+            data_size = float(dag.get_edge_data(u, v)['weight'])
+        except Exception:
+            data_size = 0.0
+        total_comm += data_size / bw
+    return total_comm
+
 def readCsvToNumpyMatrix(csv_file):
     """
     Given an input file consisting of a comma separated list of numeric values with a single header row and header column, 
@@ -449,6 +475,7 @@ if __name__ == "__main__":
         per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
         avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
         load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
+        communication_cost = _compute_communication_cost(dag, processor_schedules, communication_matrix)
 
         if power_dict is not None:
             energy = 0.0
@@ -468,6 +495,7 @@ if __name__ == "__main__":
         logger.info("")
         logger.info(f"Makespan: {makespan}")
         logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
+        logger.info(f"Communication Cost (sum transfer times): {communication_cost}")
         if energy_cost is not None:
             logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
     if args.showGantt:
