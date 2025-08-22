@@ -410,6 +410,9 @@ def generate_argparser():
     parser.add_argument("--report",
                         help="Print a report with makespan, idle time, and load balancing metrics",
                         dest="report", action="store_true")
+    parser.add_argument("--power_file",
+                        help="CSV file with per-(task,processor) power values to enable Energy Cost reporting (same format as HEFT)",
+                        type=str, default=None)
     return parser
 
 if __name__ == "__main__":
@@ -423,7 +426,14 @@ if __name__ == "__main__":
 
     communication_matrix = readCsvToNumpyMatrix(args.pe_connectivity_file)
     computation_matrix = readCsvToNumpyMatrix(args.task_execution_file)
-    dag = readDagMatrix(args.dag_file, args.showDAG) 
+    dag = readDagMatrix(args.dag_file, args.showDAG)
+
+    power_dict = None
+    if args.power_file is not None:
+        try:
+            power_dict = readCsvToDict(args.power_file)
+        except Exception as e:
+            logger.error(f"Failed to read power file {args.power_file}: {e}")
 
     processor_schedules, _, _ = schedule_dag(
         dag,
@@ -433,14 +443,32 @@ if __name__ == "__main__":
     for proc, jobs in processor_schedules.items():
         logger.info(f"Processor {proc} has the following jobs:")
         logger.info(f"\t{jobs}")
+    energy_cost = None
     if args.report:
         makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
         per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
         avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
         load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
 
-    logger.info("")
-    logger.info(f"Makespan: {makespan}")
-    logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
+        if power_dict is not None:
+            energy = 0.0
+            for proc, jobs in processor_schedules.items():
+                for job in jobs:
+                    duration = float(job.end) - float(job.start)
+                    if duration <= 0:
+                        continue
+                    if job.task in power_dict:
+                        try:
+                            task_power = float(power_dict[job.task][job.proc])
+                        except Exception:
+                            task_power = 0.0
+                        energy += duration * task_power
+            energy_cost = energy
+
+        logger.info("")
+        logger.info(f"Makespan: {makespan}")
+        logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
+        if energy_cost is not None:
+            logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
     if args.showGantt:
         showGanttChart(processor_schedules)
