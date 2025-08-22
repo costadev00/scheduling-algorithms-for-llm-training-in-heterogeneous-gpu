@@ -66,10 +66,7 @@ class RankMetric(Enum):
     EDP = "EDP"
 
 class OpMode(Enum):
-    EFT = "EFT"
-    EDP_REL = "EDP RELATIVE"
-    EDP_ABS = "EDP ABSOLUTE"
-    ENERGY = "ENERGY"
+    EFT = "EFT"  # kept for backward CLI compatibility; scheduling auto-adjusts if power data present
 
 def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, communication_startup=L0, proc_schedules=None, time_offset=0, relabel_nodes=True, rank_metric=RankMetric.MEAN, **kwargs):
     """
@@ -117,7 +114,11 @@ def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, communicat
     _self.root_node = root_node
 
     logger.debug(""); logger.debug("====================== Performing Rank-U Computation ======================\n"); logger.debug("")
-    _compute_ranku(_self, dag, metric=rank_metric, **kwargs)
+    # Auto energy-aware ranking: if power_dict provided and user chose default MEAN, promote to EDP metric
+    if 'power_dict' in kwargs and rank_metric == RankMetric.MEAN:
+        _compute_ranku(_self, dag, metric=RankMetric.EDP, **kwargs)
+    else:
+        _compute_ranku(_self, dag, metric=rank_metric, **kwargs)
 
     logger.debug(""); logger.debug("====================== Computing EFT for each (task, processor) pair and scheduling in order of decreasing Rank-U ======================"); logger.debug("")
     sorted_nodes = sorted(dag.nodes(), key=lambda node: dag.nodes()[node]['ranku'], reverse=True)
@@ -129,49 +130,31 @@ def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, communicat
         if _self.task_schedules[node] is not None:
             continue
         minTaskSchedule = ScheduleEvent(node, inf, inf, -1)
-        minEDP = inf
-        op_mode = kwargs.get("op_mode", OpMode.EFT)
-        if op_mode == OpMode.EDP_ABS:
-            assert "power_dict" in kwargs, "In order to perform EDP-based processor assignment, a power_dict is required"
-            taskschedules = []
-            minScheduleStart = inf
-
+        # Unified processor selection:
+        if 'power_dict' in kwargs:
+            # Minimize composite score = finish_time + normalized energy (duration*power)
+            candidates = []
             for proc in range(len(communication_matrix)):
                 taskschedule = _compute_eft(_self, dag, node, proc)
-                edp_t = ((taskschedule.end - taskschedule.start)**2) * kwargs["power_dict"][node][proc]
-                if (edp_t < minEDP):
-                    minEDP = edp_t
+                duration = taskschedule.end - taskschedule.start
+                try:
+                    task_power = float(kwargs['power_dict'][node][proc])
+                except Exception:
+                    task_power = 0.0
+                energy = max(0.0, duration) * task_power
+                candidates.append((taskschedule, energy))
+            avg_energy = np.mean([c[1] for c in candidates]) if any(c[1] > 0 for c in candidates) else 1.0
+            best_score = inf
+            for taskschedule, energy in candidates:
+                score = taskschedule.end + (energy / avg_energy)
+                if (score < best_score) or (score == best_score and taskschedule.end < minTaskSchedule.end) or (score == best_score and taskschedule.end == minTaskSchedule.end and energy < best_score):
+                    best_score = score
                     minTaskSchedule = taskschedule
-                elif (edp_t == minEDP and taskschedule.end < minTaskSchedule.end):
-                    minTaskSchedule = taskschedule
-        
-        elif op_mode == OpMode.EDP_REL:
-            assert "power_dict" in kwargs, "In order to perform EDP-based processor assignment, a power_dict is required"
-            taskschedules = []
-            minScheduleStart = inf
-
-            for proc in range(len(communication_matrix)):
-                taskschedules.append(_compute_eft(_self, dag, node, proc))
-                if taskschedules[proc].start < minScheduleStart:
-                    minScheduleStart = taskschedules[proc].start
-
-            for taskschedule in taskschedules:
-                # Use the makespan relative to the earliest potential assignment to encourage load balancing
-                edp_t = ((taskschedule.end - minScheduleStart)**2) * kwargs["power_dict"][node][taskschedule.proc]
-                if (edp_t < minEDP):
-                    minEDP = edp_t
-                    minTaskSchedule = taskschedule
-                elif (edp_t == minEDP and taskschedule.end < minTaskSchedule.end):
-                    minTaskSchedule = taskschedule
-        
-        elif op_mode == OpMode.ENERGY:
-            assert False, "Feature not implemented"
-            assert "power_dict" in kwargs, "In order to perform Energy-based processor assignment, a power_dict is required"
-        
         else:
+            # Pure earliest finish time
             for proc in range(len(communication_matrix)):
                 taskschedule = _compute_eft(_self, dag, node, proc)
-                if (taskschedule.end < minTaskSchedule.end):
+                if taskschedule.end < minTaskSchedule.end:
                     minTaskSchedule = taskschedule
         
         _self.task_schedules[node] = minTaskSchedule
@@ -575,10 +558,6 @@ def generate_argparser():
     parser.add_argument("--report",
                         help="Print a report with makespan and idle time metrics",
                         dest="report", action="store_true")
-    # EDP-related options
-    parser.add_argument("--op_mode",
-                        help="Processor assignment objective: EFT (time), EDP RELATIVE, or EDP ABSOLUTE",
-                        type=OpMode, default=OpMode.EFT, dest="op_mode", choices=list(OpMode))
     parser.add_argument("--power_file",
                         help="CSV file with per-(task,processor) power values required for EDP modes or RankMetric.EDP",
                         type=str, default=None)
@@ -611,11 +590,11 @@ if __name__ == "__main__":
     if args.power_file is not None:
         power_dict = readCsvToDict(args.power_file)
 
-    if (args.op_mode in [OpMode.EDP_ABS, OpMode.EDP_REL] or args.rank_metric == RankMetric.EDP) and power_dict is None:
-        logger.error("EDP modes or RankMetric.EDP require --power_file specifying a task-by-processor power CSV")
+    if (args.rank_metric == RankMetric.EDP) and power_dict is None:
+        logger.error("RankMetric.EDP requires --power_file specifying a task-by-processor power CSV")
         sys.exit(2)
 
-    kwargs = { 'rank_metric': args.rank_metric, 'op_mode': args.op_mode }
+    kwargs = { 'rank_metric': args.rank_metric }
     if power_dict is not None:
         kwargs['power_dict'] = power_dict
 

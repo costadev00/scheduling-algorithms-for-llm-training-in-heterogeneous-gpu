@@ -51,7 +51,7 @@ C0 = np.array([
     [1, 1, 0]
 ])
 
-def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, proc_schedules=None, time_offset=0, relabel_nodes=True):
+def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, proc_schedules=None, time_offset=0, relabel_nodes=True, energy_mode=False, power_dict=None):
     """
     Given an application DAG and a set of matrices specifying PE bandwidth and (task, pe) execution times, computes the HEFT schedule
     of that DAG onto that set of PEs 
@@ -114,31 +114,67 @@ def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, proc_sched
             sorted_nodes[idx], sorted_nodes[0] = sorted_nodes[0], sorted_nodes[idx]
     logger.debug(f"Scheduling tasks in this order: {sorted_nodes}")
     logger.debug(f"The associated average OCT (i.e. rank) values are: {list(map(lambda node: dag.nodes()[node]['rank'], sorted_nodes))}")
-    for node in sorted_nodes:
-        if _self.task_schedules[node] is not None:
-            continue
-        minTaskSchedule = ScheduleEvent(node, inf, inf, -1)
-        minOptimisticCost = inf
-        for proc in range(len(communication_matrix)):
-            taskschedule = _compute_eft(_self, dag, node, proc)
-            if (taskschedule.end + _self.optimistic_cost_table[node][proc] < minTaskSchedule.end + minOptimisticCost):
-                minTaskSchedule = taskschedule
-                minOptimisticCost = _self.optimistic_cost_table[node][proc]
-        _self.task_schedules[node] = minTaskSchedule
-        _self.proc_schedules[minTaskSchedule.proc].append(minTaskSchedule)
-        _self.proc_schedules[minTaskSchedule.proc] = sorted(_self.proc_schedules[minTaskSchedule.proc], key=lambda schedule_event: schedule_event.end)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug('\n')
-            for proc, jobs in _self.proc_schedules.items():
-                logger.debug(f"Processor {proc} has the following jobs:")
-                logger.debug(f"\t{jobs}")
-            logger.debug('\n')
-        for proc in range(len(_self.proc_schedules)):
-            for job in range(len(_self.proc_schedules[proc])-1):
-                first_job = _self.proc_schedules[proc][job]
-                second_job = _self.proc_schedules[proc][job+1]
-                assert first_job.end <= second_job.start, \
-                f"Jobs on a particular processor must finish before the next can begin, but job {first_job.task} on processor {first_job.proc} ends at {first_job.end} and its successor {second_job.task} starts at {second_job.start}"
+    # Dependency-safe scheduling: iterate until all tasks placed
+    remaining = list(sorted_nodes)
+    last_remaining_count = None
+    while remaining:
+        progress = False
+        for node in list(remaining):
+            # Skip if already scheduled (shouldn't happen normally)
+            if _self.task_schedules[node] is not None:
+                remaining.remove(node)
+                progress = True
+                continue
+            # Ensure all predecessors scheduled first
+            unscheduled_preds = [pred for pred in dag.predecessors(node) if _self.task_schedules[pred] is None]
+            if unscheduled_preds:
+                continue  # try later
+            # All predecessors scheduled -> we can schedule this node
+            minTaskSchedule = ScheduleEvent(node, inf, inf, -1)
+            minOptimisticCost = inf
+            if (energy_mode or power_dict is not None) and power_dict is not None:
+                minEnergy = inf
+                for proc in range(len(communication_matrix)):
+                    taskschedule = _compute_eft(_self, dag, node, proc)
+                    duration = taskschedule.end - taskschedule.start
+                    if duration <= 0:
+                        continue
+                    try:
+                        task_power = float(power_dict[node][proc])
+                    except Exception:
+                        task_power = 0.0
+                    energy = duration * task_power
+                    tie_break_key = (taskschedule.end, _self.optimistic_cost_table[node][proc])
+                    if (energy < minEnergy) or (energy == minEnergy and (tie_break_key < (minTaskSchedule.end, minOptimisticCost))):
+                        minEnergy = energy
+                        minTaskSchedule = taskschedule
+                        minOptimisticCost = _self.optimistic_cost_table[node][proc]
+            else:
+                for proc in range(len(communication_matrix)):
+                    taskschedule = _compute_eft(_self, dag, node, proc)
+                    if (taskschedule.end + _self.optimistic_cost_table[node][proc] < minTaskSchedule.end + minOptimisticCost):
+                        minTaskSchedule = taskschedule
+                        minOptimisticCost = _self.optimistic_cost_table[node][proc]
+            _self.task_schedules[node] = minTaskSchedule
+            _self.proc_schedules[minTaskSchedule.proc].append(minTaskSchedule)
+            _self.proc_schedules[minTaskSchedule.proc] = sorted(_self.proc_schedules[minTaskSchedule.proc], key=lambda schedule_event: schedule_event.end)
+            remaining.remove(node)
+            progress = True
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug('\n')
+                for proc, jobs in _self.proc_schedules.items():
+                    logger.debug(f"Processor {proc} has the following jobs:")
+                    logger.debug(f"\t{jobs}")
+                logger.debug('\n')
+            for proc in range(len(_self.proc_schedules)):
+                for job in range(len(_self.proc_schedules[proc])-1):
+                    first_job = _self.proc_schedules[proc][job]
+                    second_job = _self.proc_schedules[proc][job+1]
+                    assert first_job.end <= second_job.start, \
+                    f"Jobs on a particular processor must finish before the next can begin, but job {first_job.task} on processor {first_job.proc} ends at {first_job.end} and its successor {second_job.task} starts at {second_job.start}"
+        if not progress:
+            # No tasks scheduled in this pass -> cycle or inconsistent DAG
+            raise RuntimeError(f"Could not make scheduling progress in PEFT; remaining tasks: {remaining}")
     
     dict_output = {}
     for proc_num, proc_tasks in _self.proc_schedules.items():
@@ -477,6 +513,7 @@ if __name__ == "__main__":
         dag,
         communication_matrix=communication_matrix,
         computation_matrix=computation_matrix,
+        power_dict=power_dict,
     )
     for proc, jobs in processor_schedules.items():
         logger.info(f"Processor {proc} has the following jobs:")

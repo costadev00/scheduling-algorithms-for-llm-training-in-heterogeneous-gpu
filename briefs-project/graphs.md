@@ -8,9 +8,9 @@
   * **DAG (task graph):** `<prefix>_task_connectivity.csv`
   * **Processor interconnect:** `<prefix>_resource_BW.csv`
   * **Task runtimes per processor:** `<prefix>_task_exe_time.csv`
-* **Optional EDP/energy input:**
+* **Optional energy input (enables energy-aware scheduling automatically):**
 
-  * `<prefix>_task_power.csv`
+  * `<prefix>_task_power.csv` (when present both HEFT and PEFT incorporate energy into ranking/assignment rather than only reporting it)
 * Some bandwidth files may include **startup costs** in the last row (e.g., `canonicalgraph_resource_BW_startup.csv`).
   HEFT detects this and **auto-splits the startup vector**.
 
@@ -30,7 +30,7 @@
 
   * *Startup variant:* may include a final “Startup” row
 * **`_task_exe_time.csv`**: `v × q` matrix of execution times per (task, processor)
-* **`_task_power.csv`** *(optional)*: per-(task, processor) power for EDP modes
+* **`_task_power.csv`** *(optional)*: per-(task, processor) power enabling energy-aware scheduling (no extra flags)
 
 ## Which files to use together (examples)
 

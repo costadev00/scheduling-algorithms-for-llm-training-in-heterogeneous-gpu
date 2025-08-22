@@ -6,8 +6,8 @@ Provide reference implementations of two classic list‑scheduling algorithms (H
 ## 2. Core Algorithms
 | Algorithm | Key Idea | Ranking Phase | Processor Selection |
 |-----------|----------|---------------|---------------------|
-| HEFT (Heterogeneous Earliest Finish Time) | Prioritize tasks by upward rank then pick processor giving earliest finish | Rank-U (mean comp + mean comm to successors) | Earliest Finish Time (EFT) gap insertion |
-| PEFT (Predict Earliest Finish Time) | Improves ranking with Optimistic Cost Table (OCT) | OCT (optimistic future completion) | EFT (same placement logic) |
+| HEFT (Heterogeneous Earliest Finish Time) | Prioritize tasks by upward rank then pick processor giving earliest finish (energy-aware if power provided) | Rank-U (or EDP variant auto-used if power file) | EFT or composite (finish + normalized energy) |
+| PEFT (Predict Earliest Finish Time) | Improves ordering with Optimistic Cost Table (OCT) | OCT (optimistic future completion) | EFT (or energy-minimizing if power file) |
 
 Common mechanics:
 - DAG represented as adjacency (weight = communication data size) matrix.
@@ -69,21 +69,22 @@ python -m peft.peft -d ..\graphs\peftgraph_task_connectivity.csv -t ..\graphs\pe
 ```
 (Use absolute paths if preferred; omit `--showDAG` if Graphviz not installed—spring layout fallback will still plot.)
 
-## 7. Metrics (Lean Set)
+## 7. Metrics (Lean Set & Interaction with Scheduling)
 Reported with `--report`:
-- Makespan: Max finish time across all processors.
-- Load Balance Ratio: makespan / average busy time (1.0 ideal; >1 means imbalance).
-- Communication Cost: Sum over inter-processor edges of (data_size / bandwidth [+ startup if applicable]) realized by the schedule.
-- Waiting Time: Average time tasks wait before starting execution.
-- Energy Cost (optional): Sum over tasks of (duration × task_power on the selected processor) when `--power_file` is provided (supported in both HEFT and PEFT).
+* Makespan – Max finish time across all processors.
+* Load Balance Ratio – makespan / average busy time (1.0 ideal; >1 implies imbalance).
+* Communication Cost – Realized sum of (data_size / bandwidth [+ startup if present]) over inter‑processor edges.
+* Waiting Time – Average task start time.
+* Energy Cost – Sum of (task duration × task power) when a power file is supplied.
 
-Internal concepts (not printed): Rank‑U (HEFT ranking), OCT (PEFT ranking), EFT (placement). They drive scheduling but are hidden to keep the report minimal.
+How metrics affect scheduling decisions now (no extra flags):
+* If a power file is present, HEFT automatically switches its ranking to an energy‑aware (EDP-like) upward rank and uses a composite objective (finish time + normalized energy) for processor choice.
+* If a power file is present, PEFT automatically chooses the processor minimizing (duration × power) with EFT/OCT tie‑breakers; otherwise pure EFT.
+* Without a power file both algorithms revert to pure time-based goals (classic HEFT / PEFT behavior).
 
-Optional power usage example:
-```powershell
-python -m heft.heft -d ..\graphs\canonicalgraph_task_connectivity.csv -t ..\graphs\canonicalgraph_task_exe_time.csv -p ..\graphs\canonicalgraph_resource_BW.csv --power_file ..\graphs\canonicalgraph_task_power.csv --report
-python -m peft.peft -d ..\graphs\peftgraph_task_connectivity.csv -t ..\graphs\peftgraph_task_exe_time.csv -p ..\graphs\peftgraph_resource_BW.csv --power_file ..\graphs\peftgraph_task_power.csv --report
-```
+Internal concepts (not printed): Rank‑U / EDP-Rank (HEFT), OCT (PEFT), EFT (gap insertion). Energy integration is transparent once `_task_power.csv` is available.
+
+Supplying power data simply requires adding the matching `*_task_power.csv` file beside the other three matrices; no special energy flags are needed.
 
 ## 8. Visualization
 Flags:
