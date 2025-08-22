@@ -478,6 +478,18 @@ def _compute_communication_cost(dag, proc_schedules, communication_matrix, commu
         total_comm += data_size / bw + communication_startup[pu]
     return total_comm
 
+
+def _compute_waiting_time(proc_schedules):
+    """Compute average waiting time across all tasks.
+    Waiting time is measured as the delay from time 0 until a task starts executing."""
+    total_wait = 0.0
+    count = 0
+    for jobs in proc_schedules.values():
+        for job in jobs:
+            total_wait += float(job.start)
+            count += 1
+    return (total_wait / count) if count else 0.0
+
 def readCsvToNumpyMatrix(csv_file):
     """
     Given an input file consisting of a comma separated list of numeric values with a single header row and header column, 
@@ -618,12 +630,13 @@ if __name__ == "__main__":
         logger.info(f"Processor {proc} has the following jobs:")
         logger.info(f"\t{jobs}")
     if args.report:
-        # Simplified reporting: Makespan, Load Balance ratio, Communication Cost, Energy (if power file provided)
+        # Simplified reporting: Makespan, Load Balance ratio, Communication Cost, Waiting Time, Energy (if power file provided)
         makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
         per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
         avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
         load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
         communication_cost = _compute_communication_cost(dag, processor_schedules, communication_matrix, communication_startup)
+        waiting_time = _compute_waiting_time(processor_schedules)
 
         # Energy cost (sum over tasks of duration * power(task,proc)) if power_dict present
         energy_cost = None
@@ -646,6 +659,7 @@ if __name__ == "__main__":
         logger.info(f"Makespan: {makespan}")
         logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
         logger.info(f"Communication Cost (sum transfer times): {communication_cost}")
+        logger.info(f"Average Waiting Time (average task start): {waiting_time}")
         if energy_cost is not None:
             logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
 

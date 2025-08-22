@@ -74,6 +74,7 @@ Reported with `--report`:
 - Makespan: Max finish time across all processors.
 - Load Balance Ratio: makespan / average busy time (1.0 ideal; >1 means imbalance).
 - Communication Cost: Sum over inter-processor edges of (data_size / bandwidth [+ startup if applicable]) realized by the schedule.
+- Waiting Time: Average time tasks wait before starting execution.
 - Energy Cost (optional): Sum over tasks of (duration × task_power on the selected processor) when `--power_file` is provided (supported in both HEFT and PEFT).
 
 Internal concepts (not printed): Rank‑U (HEFT ranking), OCT (PEFT ranking), EFT (placement). They drive scheduling but are hidden to keep the report minimal.
