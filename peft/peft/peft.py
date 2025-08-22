@@ -357,6 +357,18 @@ def _compute_communication_cost(dag, proc_schedules, communication_matrix):
         total_comm += data_size / bw
     return total_comm
 
+
+def _compute_waiting_time(proc_schedules):
+    """Compute average waiting time across all tasks.
+    Waiting time is measured as the delay from time 0 until a task starts executing."""
+    total_wait = 0.0
+    count = 0
+    for jobs in proc_schedules.values():
+        for job in jobs:
+            total_wait += float(job.start)
+            count += 1
+    return (total_wait / count) if count else 0.0
+
 def readCsvToNumpyMatrix(csv_file):
     """
     Given an input file consisting of a comma separated list of numeric values with a single header row and header column, 
@@ -476,6 +488,7 @@ if __name__ == "__main__":
         avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
         load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
         communication_cost = _compute_communication_cost(dag, processor_schedules, communication_matrix)
+        waiting_time = _compute_waiting_time(processor_schedules)
 
         if power_dict is not None:
             energy = 0.0
@@ -496,6 +509,7 @@ if __name__ == "__main__":
         logger.info(f"Makespan: {makespan}")
         logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
         logger.info(f"Communication Cost (sum transfer times): {communication_cost}")
+        logger.info(f"Average Waiting Time (average task start): {waiting_time}")
         if energy_cost is not None:
             logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
     if args.showGantt:

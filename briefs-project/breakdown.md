@@ -82,6 +82,7 @@ python -m heft.heft --report --showDAG -d test\canonicalgraph_task_connectivity.
   * **Makespan** (max end time across all processors).
   * **Total idle time** (sum of idle within `[0, makespan]` across processors).
   * **Per-processor idle**.
+  * **Average waiting time** (mean task start time).
   * **Load-balance metrics**:
 
     * Coefficient of variation of busy time.

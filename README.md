@@ -44,6 +44,7 @@ Both CLIs support `--report` to print:
 - Makespan
 - Total and per-processor idle time
 - Load balancing metrics (busy time per processor, coefficient of variation, imbalance ratio, Jain’s fairness)
+- Waiting time (average time tasks wait before starting)
 
 Examples:
 
