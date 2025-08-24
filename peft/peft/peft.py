@@ -132,29 +132,12 @@ def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, proc_sched
             # All predecessors scheduled -> we can schedule this node
             minTaskSchedule = ScheduleEvent(node, inf, inf, -1)
             minOptimisticCost = inf
-            if (energy_mode or power_dict is not None) and power_dict is not None:
-                minEnergy = inf
-                for proc in range(len(communication_matrix)):
-                    taskschedule = _compute_eft(_self, dag, node, proc)
-                    duration = taskschedule.end - taskschedule.start
-                    if duration <= 0:
-                        continue
-                    try:
-                        task_power = float(power_dict[node][proc])
-                    except Exception:
-                        task_power = 0.0
-                    energy = duration * task_power
-                    tie_break_key = (taskschedule.end, _self.optimistic_cost_table[node][proc])
-                    if (energy < minEnergy) or (energy == minEnergy and (tie_break_key < (minTaskSchedule.end, minOptimisticCost))):
-                        minEnergy = energy
-                        minTaskSchedule = taskschedule
-                        minOptimisticCost = _self.optimistic_cost_table[node][proc]
-            else:
-                for proc in range(len(communication_matrix)):
-                    taskschedule = _compute_eft(_self, dag, node, proc)
-                    if (taskschedule.end + _self.optimistic_cost_table[node][proc] < minTaskSchedule.end + minOptimisticCost):
-                        minTaskSchedule = taskschedule
-                        minOptimisticCost = _self.optimistic_cost_table[node][proc]
+            # Vanilla PEFT: select processor minimizing (EFT + optimistic cost) ignoring energy
+            for proc in range(len(communication_matrix)):
+                taskschedule = _compute_eft(_self, dag, node, proc)
+                if (taskschedule.end + _self.optimistic_cost_table[node][proc] < minTaskSchedule.end + minOptimisticCost):
+                    minTaskSchedule = taskschedule
+                    minOptimisticCost = _self.optimistic_cost_table[node][proc]
             _self.task_schedules[node] = minTaskSchedule
             _self.proc_schedules[minTaskSchedule.proc].append(minTaskSchedule)
             _self.proc_schedules[minTaskSchedule.proc] = sorted(_self.proc_schedules[minTaskSchedule.proc], key=lambda schedule_event: schedule_event.end)

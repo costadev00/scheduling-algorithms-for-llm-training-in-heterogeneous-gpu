@@ -114,11 +114,8 @@ def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, communicat
     _self.root_node = root_node
 
     logger.debug(""); logger.debug("====================== Performing Rank-U Computation ======================\n"); logger.debug("")
-    # Auto energy-aware ranking: if power_dict provided and user chose default MEAN, promote to EDP metric
-    if 'power_dict' in kwargs and rank_metric == RankMetric.MEAN:
-        _compute_ranku(_self, dag, metric=RankMetric.EDP, **kwargs)
-    else:
-        _compute_ranku(_self, dag, metric=rank_metric, **kwargs)
+    # Vanilla HEFT: always use the user-selected rank metric (default MEAN) without implicit energy promotion
+    _compute_ranku(_self, dag, metric=rank_metric, **kwargs)
 
     logger.debug(""); logger.debug("====================== Computing EFT for each (task, processor) pair and scheduling in order of decreasing Rank-U ======================"); logger.debug("")
     sorted_nodes = sorted(dag.nodes(), key=lambda node: dag.nodes()[node]['ranku'], reverse=True)
@@ -130,32 +127,11 @@ def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, communicat
         if _self.task_schedules[node] is not None:
             continue
         minTaskSchedule = ScheduleEvent(node, inf, inf, -1)
-        # Unified processor selection:
-        if 'power_dict' in kwargs:
-            # Minimize composite score = finish_time + normalized energy (duration*power)
-            candidates = []
-            for proc in range(len(communication_matrix)):
-                taskschedule = _compute_eft(_self, dag, node, proc)
-                duration = taskschedule.end - taskschedule.start
-                try:
-                    task_power = float(kwargs['power_dict'][node][proc])
-                except Exception:
-                    task_power = 0.0
-                energy = max(0.0, duration) * task_power
-                candidates.append((taskschedule, energy))
-            avg_energy = np.mean([c[1] for c in candidates]) if any(c[1] > 0 for c in candidates) else 1.0
-            best_score = inf
-            for taskschedule, energy in candidates:
-                score = taskschedule.end + (energy / avg_energy)
-                if (score < best_score) or (score == best_score and taskschedule.end < minTaskSchedule.end) or (score == best_score and taskschedule.end == minTaskSchedule.end and energy < best_score):
-                    best_score = score
-                    minTaskSchedule = taskschedule
-        else:
-            # Pure earliest finish time
-            for proc in range(len(communication_matrix)):
-                taskschedule = _compute_eft(_self, dag, node, proc)
-                if taskschedule.end < minTaskSchedule.end:
-                    minTaskSchedule = taskschedule
+        # Vanilla HEFT processor selection: choose processor giving minimal earliest finish time (EFT) only
+        for proc in range(len(communication_matrix)):
+            taskschedule = _compute_eft(_self, dag, node, proc)
+            if taskschedule.end < minTaskSchedule.end:
+                minTaskSchedule = taskschedule
         
         _self.task_schedules[node] = minTaskSchedule
         _self.proc_schedules[minTaskSchedule.proc].append(minTaskSchedule)
