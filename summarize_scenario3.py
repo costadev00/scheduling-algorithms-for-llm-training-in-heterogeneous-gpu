@@ -42,11 +42,10 @@ for prefix, rc in PREFIXES:
 
     # HEFT
     comm_matrix_heft = heft_read_matrix(bw_file)
+    # Paper-only HEFT: no separate startup vector; if extra row present, drop it as legacy format
     if comm_matrix_heft.shape[0] != comm_matrix_heft.shape[1]:
-        startup = comm_matrix_heft[-1,:]
-        comm_matrix_core = comm_matrix_heft[0:-1,:]
+        comm_matrix_core = comm_matrix_heft[0:comm_matrix_heft.shape[1], :]
     else:
-        startup = [0]*comm_matrix_heft.shape[0]
         comm_matrix_core = comm_matrix_heft
     comp_matrix_heft = heft_read_matrix(exe_file)
     dag_heft = heft_read_dag(dag_file, show_dag=False)
@@ -54,7 +53,6 @@ for prefix, rc in PREFIXES:
     proc_sched_heft, _, _ = heft_schedule(
         dag_heft,
         communication_matrix=comm_matrix_core,
-        communication_startup=startup,
         computation_matrix=comp_matrix_heft,
         power_dict=power_dict_heft,
     )
@@ -62,7 +60,7 @@ for prefix, rc in PREFIXES:
     per_proc_busy_heft, _, _, _ = heft_load_balance(proc_sched_heft)
     avg_busy_heft = (sum(per_proc_busy_heft.values())/len(per_proc_busy_heft)) if per_proc_busy_heft else math.inf
     lb_ratio_heft = makespan_heft / avg_busy_heft if avg_busy_heft>0 else math.inf
-    comm_cost_heft = heft_comm_cost(dag_heft, proc_sched_heft, comm_matrix_core, startup)
+    comm_cost_heft = heft_comm_cost(dag_heft, proc_sched_heft, comm_matrix_core, [0]*comm_matrix_core.shape[0])
     wait_heft = heft_wait_time(proc_sched_heft)
     energy_heft = 0.0
     for proc, jobs in proc_sched_heft.items():

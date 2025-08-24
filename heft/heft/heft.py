@@ -1,622 +1,212 @@
-"""Core code to be used for scheduling a task DAG with HEFT"""
+"""Paper-only HEFT implementation (Topcuoglu et al., 2002).
 
-from collections import deque, namedtuple
-from math import inf
-try:
-    from .gantt import showGanttChart
-except Exception:
-    try:
-        from heft.gantt import showGanttChart
-    except Exception:
-        # Last resort: import sibling when running as a plain script
-        from gantt import showGanttChart
-from types import SimpleNamespace
-from enum import Enum
+Provided API kept compatible with existing scenario scripts:
+ schedule_dag(dag, computation_matrix, communication_matrix, communication_startup=..., power_dict=...)
+ helper functions: readCsvToNumpyMatrix, readCsvToDict, readDagMatrix,
+ metrics helpers: _compute_makespan_and_idle, _compute_load_balance, _compute_communication_cost, _compute_waiting_time.
 
-import argparse
-import os
-import logging
-import sys
-import numpy as np
-import matplotlib.pyplot as plt
-import networkx as nx
-
-logger = logging.getLogger('heft')
-
-ScheduleEvent = namedtuple('ScheduleEvent', 'task start end proc')
-
+Only canonical HEFT is implemented: upward rank using average exec times and average communication (normalized by average bandwidth),
+then processor selection by earliest finish time (EFT) with insertion based policy.
+Energy is never used for scheduling; if power_dict provided, energy can be computed externally.
 """
-Default computation matrix - taken from Topcuoglu 2002 HEFT paper
-computation matrix: v x q matrix with v tasks and q PEs
-"""
-W0 = np.array([
-    [14, 16, 9],
-    [13, 19, 18],
-    [11, 13, 19],
-    [13, 8, 17],
-    [12, 13, 10],
-    [13, 16, 9],
-    [7, 15, 11],
-    [5, 11, 14],
-    [18, 12, 20],
-    [21, 7, 16]
-])
 
-"""
-Default communication matrix - not listed in Topcuoglu 2002 HEFT paper
-communication matrix: q x q matrix with q PEs
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Dict, List
+import logging, numpy as np, networkx as nx, matplotlib.pyplot as plt
 
-Note that a communication cost of 0 is used for a given processor to itself
-"""
-C0 = np.array([
-    [0, 1, 1],
-    [1, 0, 1],
-    [1, 1, 0]
-])
+logger = logging.getLogger("heft")
 
-"""
-Default communication startup cost vector
-"""
-L0 = np.array([0, 0, 0])
+@dataclass
+class ScheduleEvent:
+    task: int
+    start: float
+    end: float
+    proc: int
 
-class RankMetric(Enum):
-    MEAN = "MEAN"
-    WORST = "WORST"
-    BEST = "BEST"
-    EDP = "EDP"
-
-class OpMode(Enum):
-    EFT = "EFT"  # kept for backward CLI compatibility; scheduling auto-adjusts if power data present
-
-def schedule_dag(dag, computation_matrix=W0, communication_matrix=C0, communication_startup=L0, proc_schedules=None, time_offset=0, relabel_nodes=True, rank_metric=RankMetric.MEAN, **kwargs):
-    """
-    Given an application DAG and a set of matrices specifying PE bandwidth and (task, pe) execution times, computes the HEFT schedule
-    of that DAG onto that set of PEs 
-    """
-    if proc_schedules == None:
-        proc_schedules = {}
-
-    _self = {
-        'computation_matrix': computation_matrix,
-        'communication_matrix': communication_matrix,
-        'communication_startup': communication_startup,
-        'task_schedules': {},
-        'proc_schedules': proc_schedules,
-        'numExistingJobs': 0,
-        'time_offset': time_offset,
-        'root_node': None
-    }
-    _self = SimpleNamespace(**_self)
-
-    for proc in proc_schedules:
-        _self.numExistingJobs = _self.numExistingJobs + len(proc_schedules[proc])
-
-    if relabel_nodes:
-        dag = nx.relabel_nodes(dag, dict(map(lambda node: (node, node+_self.numExistingJobs), list(dag.nodes()))))
-    else:
-        #Negates any offsets that would have been needed had the jobs been relabeled
-        _self.numExistingJobs = 0
-
-    for i in range(_self.numExistingJobs + len(_self.computation_matrix)):
-        _self.task_schedules[i] = None
-    for i in range(len(_self.communication_matrix)):
-        if i not in _self.proc_schedules:
-            _self.proc_schedules[i] = []
-
-    for proc in proc_schedules:
-        for schedule_event in proc_schedules[proc]:
-            _self.task_schedules[schedule_event.task] = schedule_event
-
-    # Nodes with no successors cause the any expression to be empty    
-    root_node = [node for node in dag.nodes() if not any(True for _ in dag.predecessors(node))]
-    assert len(root_node) == 1, f"Expected a single root node, found {len(root_node)}"
-    root_node = root_node[0]
-    _self.root_node = root_node
-
-    logger.debug(""); logger.debug("====================== Performing Rank-U Computation ======================\n"); logger.debug("")
-    # Vanilla HEFT: always use the user-selected rank metric (default MEAN) without implicit energy promotion
-    _compute_ranku(_self, dag, metric=rank_metric, **kwargs)
-
-    logger.debug(""); logger.debug("====================== Computing EFT for each (task, processor) pair and scheduling in order of decreasing Rank-U ======================"); logger.debug("")
-    sorted_nodes = sorted(dag.nodes(), key=lambda node: dag.nodes()[node]['ranku'], reverse=True)
-    if sorted_nodes[0] != root_node:
-        logger.debug("Root node was not the first node in the sorted list. Must be a zero-cost and zero-weight placeholder node. Rearranging it so it is scheduled first\n")
-        idx = sorted_nodes.index(root_node)
-        sorted_nodes[idx], sorted_nodes[0] = sorted_nodes[0], sorted_nodes[idx]
-    for node in sorted_nodes:
-        if _self.task_schedules[node] is not None:
-            continue
-        minTaskSchedule = ScheduleEvent(node, inf, inf, -1)
-        # Vanilla HEFT processor selection: choose processor giving minimal earliest finish time (EFT) only
-        for proc in range(len(communication_matrix)):
-            taskschedule = _compute_eft(_self, dag, node, proc)
-            if taskschedule.end < minTaskSchedule.end:
-                minTaskSchedule = taskschedule
-        
-        _self.task_schedules[node] = minTaskSchedule
-        _self.proc_schedules[minTaskSchedule.proc].append(minTaskSchedule)
-        _self.proc_schedules[minTaskSchedule.proc] = sorted(_self.proc_schedules[minTaskSchedule.proc], key=lambda schedule_event: (schedule_event.end, schedule_event.start))
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug('\n')
-            for proc, jobs in _self.proc_schedules.items():
-                logger.debug(f"Processor {proc} has the following jobs:")
-                logger.debug(f"\t{jobs}")
-            logger.debug('\n')
-        for proc in range(len(_self.proc_schedules)):
-            for job in range(len(_self.proc_schedules[proc])-1):
-                first_job = _self.proc_schedules[proc][job]
-                second_job = _self.proc_schedules[proc][job+1]
-                assert first_job.end <= second_job.start, \
-                f"Jobs on a particular processor must finish before the next can begin, but job {first_job.task} on processor {first_job.proc} ends at {first_job.end} and its successor {second_job.task} starts at {second_job.start}"
-    
-    dict_output = {}
-    for proc_num, proc_tasks in _self.proc_schedules.items():
-        for idx, task in enumerate(proc_tasks):
-            if idx > 0 and (proc_tasks[idx-1].end - proc_tasks[idx-1].start > 0):
-                dict_output[task.task] = (proc_num, idx, [proc_tasks[idx-1].task])
-            else:
-                dict_output[task.task] = (proc_num, idx, [])
-
-    return _self.proc_schedules, _self.task_schedules, dict_output
-
-def _scale_by_operating_freq(_self, **kwargs):
-    if "operating_freqs" not in kwargs:
-        logger.debug("No operating frequency argument is present, assuming at max frequency and values are unchanged")
-        return
-    return #TODO
-    #for pe_num, freq in enumerate(kwargs["operating_freqs"]):
-        #_self.computation_matrix[:, pe_num] = _self.computation_matrix[:, pe_num] * (1 + compute_DVFS_performance_slowdown(pe_num, freq))
-
-def _compute_ranku(_self, dag, metric=RankMetric.MEAN, **kwargs):
-    """
-    Uses a basic BFS approach to traverse upwards through the graph assigning ranku along the way
-    """
-    terminal_node = [node for node in dag.nodes() if not any(True for _ in dag.successors(node))]
-    assert len(terminal_node) == 1, f"Expected a single terminal node, found {len(terminal_node)}"
-    terminal_node = terminal_node[0]
-
-    #TODO: Should this be configurable?
-    #avgCommunicationCost = np.mean(_self.communication_matrix[np.where(_self.communication_matrix > 0)])
-    diagonal_mask = np.ones(_self.communication_matrix.shape, dtype=bool)
-    np.fill_diagonal(diagonal_mask, 0)
-    avgCommunicationCost = np.mean(_self.communication_matrix[diagonal_mask]) + np.mean(_self.communication_startup)
-    for edge in dag.edges():
-        logger.debug(f"Assigning {edge}'s average weight based on average communication cost. {float(dag.get_edge_data(*edge)['weight'])} => {float(dag.get_edge_data(*edge)['weight']) / avgCommunicationCost}")
-        nx.set_edge_attributes(dag, { edge: float(dag.get_edge_data(*edge)['weight']) / avgCommunicationCost }, 'avgweight')
-
-    # Utilize a masked array so that np.mean, etc, calculations ignore the entries that are inf
-    comp_matrix_masked = np.ma.masked_where(_self.computation_matrix == inf, _self.computation_matrix)
-
-    nx.set_node_attributes(dag, { terminal_node: np.mean(comp_matrix_masked[terminal_node-_self.numExistingJobs]) }, "ranku")
-    visit_queue = deque(dag.predecessors(terminal_node))
-
-    while visit_queue:
-        node = visit_queue.pop()
-        while _node_can_be_processed(_self, dag, node) is not True:
-            try:
-                node2 = visit_queue.pop()
-            except IndexError:
-                raise RuntimeError(f"Node {node} cannot be processed, and there are no other nodes in the queue to process instead!")
-            visit_queue.appendleft(node)
-            node = node2
-
-        logger.debug(f"Assigning ranku for node: {node}")
-        if metric == RankMetric.MEAN:
-            max_successor_ranku = -1
-            for succnode in dag.successors(node):
-                logger.debug(f"\tLooking at successor node: {succnode}")
-                logger.debug(f"\tThe edge weight from node {node} to node {succnode} is {dag[node][succnode]['avgweight']}, and the ranku for node {node} is {dag.nodes()[succnode]['ranku']}")
-                val = float(dag[node][succnode]['avgweight']) + dag.nodes()[succnode]['ranku']
-                if val > max_successor_ranku:
-                    max_successor_ranku = val
-            assert max_successor_ranku >= 0, f"Expected maximum successor ranku to be greater or equal to 0 but was {max_successor_ranku}"
-            nx.set_node_attributes(dag, { node: np.mean(comp_matrix_masked[node-_self.numExistingJobs]) + max_successor_ranku }, "ranku")
-        
-        elif metric == RankMetric.WORST:
-            max_successor_ranku = -1
-            max_node_idx = np.where(comp_matrix_masked[node-_self.numExistingJobs] == max(comp_matrix_masked[node-_self.numExistingJobs]))[0][0]
-            logger.debug(f"\tNode {node} has maximum computation cost of {comp_matrix_masked[node-_self.numExistingJobs][max_node_idx]} on processor {max_node_idx}")
-            for succnode in dag.successors(node):
-                logger.debug(f"\tLooking at successor node: {succnode}")
-                max_succ_idx = np.where(comp_matrix_masked[succnode-_self.numExistingJobs] == max(comp_matrix_masked[succnode-_self.numExistingJobs]))[0][0]
-                logger.debug(f"\tNode {succnode} has maximum computation cost of {comp_matrix_masked[succnode-_self.numExistingJobs][max_succ_idx]} on processor {max_succ_idx}")
-                val = _self.communication_matrix[max_node_idx, max_succ_idx] + dag.nodes()[succnode]['ranku']
-                if val > max_successor_ranku:
-                    max_successor_ranku = val
-            assert max_successor_ranku >= 0, f"Expected maximum successor ranku to be greater or equal to 0 but was {max_successor_ranku}"
-            nx.set_node_attributes(dag, { node: comp_matrix_masked[node-_self.numExistingJobs, max_node_idx] + max_successor_ranku}, "ranku")
-        
-        elif metric == RankMetric.BEST:
-            min_successor_ranku = inf
-            min_node_idx = np.where(comp_matrix_masked[node-_self.numExistingJobs] == min(comp_matrix_masked[node-_self.numExistingJobs]))[0][0]
-            logger.debug(f"\tNode {node} has minimum computation cost on processor {min_node_idx}")
-            for succnode in dag.successors(node):
-                logger.debug(f"\tLooking at successor node: {succnode}")
-                min_succ_idx = np.where(comp_matrix_masked[succnode-_self.numExistingJobs] == min(comp_matrix_masked[succnode-_self.numExistingJobs]))[0][0]
-                logger.debug(f"\tThis successor node has minimum computation cost on processor {min_succ_idx}")
-                val = _self.communication_matrix[min_node_idx, min_succ_idx] + dag.nodes()[succnode]['ranku']
-                if val < min_successor_ranku:
-                    min_successor_ranku = val
-            assert min_successor_ranku >= 0, f"Expected minimum successor ranku to be greater or equal to 0 but was {min_successor_ranku}"
-            nx.set_node_attributes(dag, { node: comp_matrix_masked[node-_self.numExistingJobs, min_node_idx] + min_successor_ranku}, "ranku")
-        
-        elif metric == RankMetric.EDP:
-            assert "power_dict" in kwargs, "In order to perform EDP-based Rank Method, a power_dict is required"
-            power_dict = kwargs.get("power_dict", np.array([[]]))
-            power_dict_masked = np.ma.masked_where(power_dict[node] == inf, power_dict[node])
-            max_successor_ranku = -1
-            for succnode in dag.successors(node):
-                logger.debug(f"\tLooking at successor node: {succnode}")
-                logger.debug(f"\tThe edge weight from node {node} to node {succnode} is {dag[node][succnode]['avgweight']}, and the ranku for node {node} is {dag.nodes()[succnode]['ranku']}")
-                val = float(dag[node][succnode]['avgweight']) + dag.nodes()[succnode]['ranku']
-                if val > max_successor_ranku:
-                    max_successor_ranku = val
-            assert max_successor_ranku >= 0, f"Expected maximum successor ranku to be greater or equal to 0 but was {max_successor_ranku}"
-            avg_edp = np.mean(comp_matrix_masked[node-_self.numExistingJobs])**2 * np.mean(power_dict_masked)
-            nx.set_node_attributes(dag, { node: avg_edp + max_successor_ranku }, "ranku")
-        
-        else:
-            raise RuntimeError(f"Unrecognied Rank-U metric {metric}, unable to compute upward rank")
-
-        visit_queue.extendleft([prednode for prednode in dag.predecessors(node) if prednode not in visit_queue])
-    
-    logger.debug("")
-    for node in dag.nodes():
-        logger.debug(f"Node: {node}, Rank U: {dag.nodes()[node]['ranku']}")
-
-def _node_can_be_processed(_self, dag, node):
-    """
-    Validates that a node is able to be processed in Rank U calculations. Namely, that all of its successors have their Rank U values properly assigned
-    Otherwise, errors can occur in processing DAGs of the form
-    A
-    |\
-    | B
-    |/
-    C
-    Where C enqueues A and B, A is popped off, and it is unable to be processed because B's Rank U has not been computed
-    """
-    for succnode in dag.successors(node):
-        if 'ranku' not in dag.nodes()[succnode]:
-            logger.debug(f"Attempted to compute the Rank U for node {node} but found that it has an unprocessed successor {dag.nodes()[succnode]}. Will try with the next node in the queue")
-            return False
-    return True
-
-def _compute_eft(_self, dag, node, proc):
-    """
-    Computes the EFT of a particular node if it were scheduled on a particular processor
-    It does this by first looking at all predecessor tasks of a particular node and determining the earliest time a task would be ready for execution (ready_time)
-    It then looks at the list of tasks scheduled on this particular processor and determines the earliest time (after ready_time) a given node can be inserted into this processor's queue
-    """
-    ready_time = _self.time_offset
-    logger.debug(f"Computing EFT for node {node} on processor {proc}")
-    for prednode in list(dag.predecessors(node)):
-        predjob = _self.task_schedules[prednode]
-        assert predjob != None, f"Predecessor nodes must be scheduled before their children, but node {node} has an unscheduled predecessor of {prednode}"
-        logger.debug(f"\tLooking at predecessor node {prednode} with job {predjob} to determine ready time")
-        if _self.communication_matrix[predjob.proc, proc] == 0:
-            ready_time_t = predjob.end
-        else:
-            ready_time_t = predjob.end + dag[predjob.task][node]['weight'] / _self.communication_matrix[predjob.proc, proc] + _self.communication_startup[predjob.proc]
-        logger.debug(f"\tNode {prednode} can have its data routed to processor {proc} by time {ready_time_t}")
-        if ready_time_t > ready_time:
-            ready_time = ready_time_t
-    logger.debug(f"\tReady time determined to be {ready_time}")
-
-    computation_time = _self.computation_matrix[node-_self.numExistingJobs, proc]
-    job_list = _self.proc_schedules[proc]
-    for idx in range(len(job_list)):
-        prev_job = job_list[idx]
-        if idx == 0:
-            if (prev_job.start - computation_time) - ready_time > 0:
-                logger.debug(f"Found an insertion slot before the first job {prev_job} on processor {proc}")
-                job_start = ready_time
-                min_schedule = ScheduleEvent(node, job_start, job_start+computation_time, proc)
-                break
-        if idx == len(job_list)-1:
-            job_start = max(ready_time, prev_job.end)
-            min_schedule = ScheduleEvent(node, job_start, job_start + computation_time, proc)
-            break
-        next_job = job_list[idx+1]
-        #Start of next job - computation time == latest we can start in this window
-        #Max(ready_time, previous job's end) == earliest we can start in this window
-        #If there's space in there, schedule in it
-        logger.debug(f"\tLooking to fit a job of length {computation_time} into a slot of size {next_job.start - max(ready_time, prev_job.end)}")
-        if (next_job.start - computation_time) - max(ready_time, prev_job.end) >= 0:
-            job_start = max(ready_time, prev_job.end)
-            logger.debug(f"\tInsertion is feasible. Inserting job with start time {job_start} and end time {job_start + computation_time} into the time slot [{prev_job.end}, {next_job.start}]")
-            min_schedule = ScheduleEvent(node, job_start, job_start + computation_time, proc)
-            break
-    else:
-        #For-else loop: the else executes if the for loop exits without break-ing, which in this case means the number of jobs on this processor are 0
-        min_schedule = ScheduleEvent(node, ready_time, ready_time + computation_time, proc)
-    logger.debug(f"\tFor node {node} on processor {proc}, the EFT is {min_schedule}")
-    return min_schedule    
-
-def _compute_makespan_and_idle(proc_schedules):
-    """
-    Compute makespan and total idle time across processors within [0, makespan].
-    Idle per processor includes: initial idle before first job, gaps between jobs, and tail idle to makespan.
-    Returns (makespan: float, total_idle: float, per_proc_idle: dict[int,float]).
-    """
-    # Makespan is the max job end across all processors
-    makespan = 0.0
-    for jobs in proc_schedules.values():
-        for job in jobs:
-            try:
-                end_t = float(job.end)
-            except Exception:
-                end_t = job.end
-            if end_t > makespan:
-                makespan = end_t
-
-    total_idle = 0.0
-    per_proc_idle = {}
-    for proc, jobs in proc_schedules.items():
-        # Sort by start time to find gaps
-        jobs_sorted = sorted(jobs, key=lambda j: float(j.start))
-        idle = 0.0
-        if len(jobs_sorted) == 0:
-            idle = makespan
-        else:
-            # Idle before first job
-            idle += max(0.0, float(jobs_sorted[0].start) - 0.0)
-            # Gaps between jobs
-            for i in range(len(jobs_sorted) - 1):
-                idle += max(0.0, float(jobs_sorted[i+1].start) - float(jobs_sorted[i].end))
-            # Tail idle to makespan
-            idle += max(0.0, makespan - float(jobs_sorted[-1].end))
-        per_proc_idle[proc] = idle
-        total_idle += idle
-
-    return makespan, total_idle, per_proc_idle
-
-def _compute_load_balance(proc_schedules):
-    """
-    Compute load-balancing metrics from busy time per processor.
-    Returns:
-      per_proc_busy: dict[int,float]
-      cv: coefficient of variation of busy time (std/mean)
-      imbalance_ratio: max(busy)/min(busy) (inf if any min==0 while max>0)
-      fairness: Jain's fairness index in [0,1]
-    """
-    per_proc_busy = {}
-    for proc, jobs in proc_schedules.items():
-        busy = 0.0
-        for j in jobs:
-            busy += float(j.end) - float(j.start)
-        per_proc_busy[proc] = busy
-
-    busy_values = list(per_proc_busy.values())
-    n = len(busy_values)
-    if n == 0:
-        return per_proc_busy, 0.0, 1.0, 1.0
-
-    total_busy = sum(busy_values)
-    mean_busy = total_busy / n
-    # population std
-    variance = sum((b - mean_busy) ** 2 for b in busy_values) / n
-    std_busy = variance ** 0.5
-    cv = (std_busy / mean_busy) if mean_busy > 0 else 0.0
-
-    max_busy = max(busy_values) if busy_values else 0.0
-    min_busy = min(busy_values) if busy_values else 0.0
-    if max_busy == 0 and min_busy == 0:
-        imbalance_ratio = 1.0
-    else:
-        imbalance_ratio = (max_busy / min_busy) if min_busy > 0 else float('inf')
-
-    denom = n * sum(b * b for b in busy_values)
-    fairness = (total_busy ** 2 / denom) if denom > 0 else 1.0
-
-    return per_proc_busy, cv, imbalance_ratio, fairness
-
-def _compute_communication_cost(dag, proc_schedules, communication_matrix, communication_startup):
-    """Compute total realized communication time based on the schedule.
-    For each edge (u,v): if tasks placed on different processors, cost = data_size / bandwidth + startup.
-    Startup taken from source processor (HEFT convention)."""
-    # Build quick lookup: task -> (proc, start, end)
-    task_map = {}
-    for proc, jobs in proc_schedules.items():
-        for job in jobs:
-            task_map[job.task] = job
-    total_comm = 0.0
-    for u, v in dag.edges():
-        if u not in task_map or v not in task_map:
-            continue
-        pu = task_map[u].proc
-        pv = task_map[v].proc
-        if pu == pv:
-            continue
-        bw = communication_matrix[pu, pv]
-        if bw <= 0:
-            continue  # avoid division by zero; treat as no comm time
-        try:
-            data_size = float(dag.get_edge_data(u, v)['weight'])
-        except Exception:
-            data_size = 0.0
-        total_comm += data_size / bw + communication_startup[pu]
-    return total_comm
-
-
-def _compute_waiting_time(proc_schedules):
-    """Compute average waiting time across all tasks.
-    Waiting time is measured as the delay from time 0 until a task starts executing."""
-    total_wait = 0.0
-    count = 0
-    for jobs in proc_schedules.values():
-        for job in jobs:
-            total_wait += float(job.start)
-            count += 1
-    return (total_wait / count) if count else 0.0
-
-def readCsvToNumpyMatrix(csv_file):
-    """
-    Given an input file consisting of a comma separated list of numeric values with a single header row and header column, 
-    this function reads that data into a numpy matrix and strips the top row and leftmost column
-    """
+def readCsvToNumpyMatrix(csv_file: str) -> np.ndarray:
     with open(csv_file) as fd:
-        logger.debug(f"Reading the contents of {csv_file} into a matrix")
-        contents = fd.read()
-        contentsList = contents.split('\n')
-        contentsList = list(map(lambda line: line.split(','), contentsList))
-        contentsList = list(filter(lambda arr: arr != [''], contentsList))
-        
-        matrix = np.array(contentsList)
-        matrix = np.delete(matrix, 0, 0) # delete the first row (entry 0 along axis 0)
-        matrix = np.delete(matrix, 0, 1) # delete the first column (entry 0 along axis 1)
-        matrix = matrix.astype(float)
-        logger.debug(f"After deleting the first row and column of input data, we are left with this matrix:\n{matrix}")
-        return matrix
+        rows = [r.strip().split(',') for r in fd.read().strip().splitlines() if r.strip()]
+    arr = np.array(rows)[1:,1:]
+    return arr.astype(float)
 
-def readCsvToDict(csv_file):
-    """
-    Given an input file consisting of a comma separated list of numeric values with a single header row and header column, 
-    this function reads that data into a dictionary with keys that are node numbers and values that are the CSV lists
-    """
-    with open(csv_file) as fd:
-        matrix = readCsvToNumpyMatrix(csv_file)
-        
-        outputDict = {}
-        for row_num, row in enumerate(matrix):
-            outputDict[row_num] = row
-        return outputDict
+def readCsvToDict(csv_file: str):
+    m = readCsvToNumpyMatrix(csv_file)
+    return {i: row for i, row in enumerate(m)}
 
-def readDagMatrix(dag_file, show_dag=False):
-    """
-    Given an input file consisting of a connectivity matrix, reads and parses it into a networkx Directional Graph (DiGraph)
-    """
-    matrix = readCsvToNumpyMatrix(dag_file)
-
-    dag = nx.DiGraph(matrix)
-    dag.remove_edges_from(
-        # Remove all edges with weight of 0 since we have no placeholder for "this edge doesn't exist" in the input file
-        [edge for edge in dag.edges() if dag.get_edge_data(*edge)['weight'] == '0.0']
-    )
-
+def readDagMatrix(dag_file: str, show_dag: bool=False):
+    m = readCsvToNumpyMatrix(dag_file)
+    dag = nx.DiGraph(m)
+    dag.remove_edges_from([e for e in dag.edges() if dag.get_edge_data(*e)['weight'] == '0.0'])
     if show_dag:
         try:
-            # Prefer Graphviz layout for clear DAG visualization if available
             pos = nx.nx_pydot.graphviz_layout(dag, prog='dot')
-        except Exception as e:
-            # Fall back gracefully when Graphviz (dot) or pydot is missing
-            logger.warning(f"Graphviz 'dot' layout unavailable ({e}). Falling back to spring layout. Install Graphviz and ensure 'dot' is on PATH to use --showDAG with graphviz layout.")
+        except Exception:
             pos = nx.spring_layout(dag, seed=42)
         nx.draw(dag, pos=pos, with_labels=True)
         plt.show()
-
     return dag
 
-def generate_argparser():
-    # Resolve the repo-level 'graphs' directory relative to this file so defaults work from any CWD
-    data_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'graphs'))
-    parser = argparse.ArgumentParser(description="A tool for finding HEFT schedules for given DAG task graphs")
-    parser.add_argument("-d", "--dag_file", 
-                        help="File containing input DAG to be scheduled. Uses default 10 node dag from Topcuoglu 2002 if none given.", 
-                        type=str, default=os.path.join(data_root, "canonicalgraph_task_connectivity.csv"))
-    parser.add_argument("-p", "--pe_connectivity_file", 
-                        help="File containing connectivity/bandwidth information about PEs. Uses a default 3x3 matrix from Topcuoglu 2002 if none given. If communication startup costs (L) are needed, a \"Startup\" row can be used as the last CSV row", 
-                        type=str, default=os.path.join(data_root, "canonicalgraph_resource_BW.csv"))
-    parser.add_argument("-t", "--task_execution_file", 
-                        help="File containing execution times of each task on each particular PE. Uses a default 10x3 matrix from Topcuoglu 2002 if none given.", 
-                        type=str, default=os.path.join(data_root, "canonicalgraph_task_exe_time.csv"))
-    parser.add_argument("-l", "--loglevel", 
-                        help="The log level to be used in this module. Default: INFO", 
-                        type=str, default="INFO", dest="loglevel", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
-    parser.add_argument("--metric",
-                        help="Specify which metric to use when performing upward rank calculation",
-                        type=RankMetric, default=RankMetric.MEAN, dest="rank_metric", choices=list(RankMetric))
-    parser.add_argument("--showDAG", 
-                        help="Switch used to enable display of the incoming task DAG", 
-                        dest="showDAG", action="store_true")
-    parser.add_argument("--showGantt", 
-                        help="Switch used to enable display of the final scheduled Gantt chart", 
-                        dest="showGantt", action="store_true")
-    parser.add_argument("--report",
-                        help="Print a report with makespan and idle time metrics",
-                        dest="report", action="store_true")
-    parser.add_argument("--power_file",
-                        help="CSV file with per-(task,processor) power values required for EDP modes or RankMetric.EDP",
-                        type=str, default=None)
-    return parser
+def _avg_exec(comp: np.ndarray, t: int) -> float:
+    return float(np.mean(comp[t]))
+
+def _avg_bandwidth(comm: np.ndarray) -> float:
+    mask = np.ones_like(comm, dtype=bool)
+    np.fill_diagonal(mask, False)
+    vals = comm[mask]
+    vals = vals[vals > 0]
+    return float(np.mean(vals)) if len(vals) else 1.0
+
+def _compute_upward_ranks(dag: nx.DiGraph, comp: np.ndarray, comm: np.ndarray) -> Dict[int,float]:
+    avg_bw = _avg_bandwidth(comm)
+    for u,v in dag.edges():
+        w = float(dag[u][v]['weight'])
+        dag[u][v]['norm_comm'] = w / avg_bw if avg_bw>0 else 0.0
+    sinks = [n for n in dag.nodes() if dag.out_degree(n)==0]
+    if not sinks:
+        raise ValueError("DAG has no sink")
+    if len(sinks)>1:
+        virtual = max(dag.nodes())+1
+        for s in sinks:
+            dag.add_edge(s, virtual, weight=0.0, norm_comm=0.0)
+        sink = virtual
+    else:
+        sink = sinks[0]
+    rank = {}
+    pending = [sink]
+    while pending:
+        n = pending.pop()
+        succs = list(dag.successors(n))
+        if any(s not in rank for s in succs):
+            pending.insert(0, n); continue
+        if n == sink:
+            r = _avg_exec(comp,n) if n < comp.shape[0] else 0.0
+        else:
+            r = _avg_exec(comp,n) + max((dag[n][s]['norm_comm'] + rank[s]) for s in succs)
+        rank[n]=r
+        for p in dag.predecessors(n):
+            if p not in rank: pending.append(p)
+    return rank
+
+def _insertion_eft(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent], proc_sched:Dict[int,List[ScheduleEvent]]):
+    ready = 0.0
+    for pred in dag.predecessors(task):
+        sj = task_sched[pred]
+        if sj.proc == proc:
+            arrival = sj.end
+        else:
+            bw = comm[sj.proc, proc]
+            comm_t = (float(dag[pred][task]['weight']) / bw) if bw>0 else 0.0
+            arrival = sj.end + comm_t
+        if arrival > ready: ready = arrival
+    dur = float(comp[task, proc])
+    jobs = proc_sched[proc]
+    best = ScheduleEvent(task, ready, ready+dur, proc)
+    for i,j in enumerate(jobs):
+        if i==0 and j.start - dur >= ready:
+            cand = ScheduleEvent(task, ready, ready+dur, proc)
+            if cand.end < best.end: best = cand
+        if i < len(jobs)-1:
+            nxt = jobs[i+1]
+            gap_start = max(ready, j.end)
+            gap_end = nxt.start
+            if gap_end - gap_start >= dur:
+                cand = ScheduleEvent(task, gap_start, gap_start+dur, proc)
+                if cand.end < best.end: best = cand
+        if i == len(jobs)-1:
+            start = max(ready, j.end)
+            cand = ScheduleEvent(task, start, start+dur, proc)
+            if cand.end < best.end: best = cand
+    return best
+
+def schedule_dag(dag, computation_matrix, communication_matrix, communication_startup=None, proc_schedules=None, **kwargs):
+    if proc_schedules is None: proc_schedules = {p:[] for p in range(communication_matrix.shape[0])}
+    ranks = _compute_upward_ranks(dag, computation_matrix, communication_matrix)
+    tasks = [n for n in dag.nodes() if n < computation_matrix.shape[0]]
+    order = sorted(tasks, key=lambda n: ranks[n], reverse=True)
+    task_sched: Dict[int,ScheduleEvent] = {}
+    for p in range(communication_matrix.shape[0]):
+        if p not in proc_schedules: proc_schedules[p] = []
+    for t in order:
+        for pred in dag.predecessors(t):
+            if pred not in task_sched and pred < computation_matrix.shape[0]:
+                raise RuntimeError("Predecessor not scheduled before child in HEFT (DAG invalid)")
+        best=None
+        for p in range(communication_matrix.shape[0]):
+            cand = _insertion_eft(t,p,dag,computation_matrix,communication_matrix,task_sched,proc_schedules)
+            if best is None or cand.end < best.end: best = cand
+        task_sched[t]=best  # type: ignore
+        proc_schedules[best.proc].append(best)  # type: ignore
+        proc_schedules[best.proc].sort(key=lambda j:j.start)
+    return proc_schedules, task_sched, {}
+
+def _compute_makespan_and_idle(proc_schedules):
+    makespan = max((ev.end for jobs in proc_schedules.values() for ev in jobs), default=0.0)
+    total_idle=0.0; per_proc={}
+    for p,jobs in proc_schedules.items():
+        jobs_sorted=sorted(jobs, key=lambda j:j.start)
+        idle=0.0
+        if not jobs_sorted:
+            idle = makespan
+        else:
+            idle += jobs_sorted[0].start
+            for i in range(len(jobs_sorted)-1):
+                idle += max(0.0, jobs_sorted[i+1].start - jobs_sorted[i].end)
+            idle += max(0.0, makespan - jobs_sorted[-1].end)
+        per_proc[p]=idle; total_idle+=idle
+    return makespan, total_idle, per_proc
+
+def _compute_load_balance(proc_schedules):
+    busy={p:sum(ev.end-ev.start for ev in jobs) for p,jobs in proc_schedules.items()}
+    vals=list(busy.values()); n=len(vals)
+    if n==0: return busy,0.0,1.0,1.0
+    mean=sum(vals)/n
+    var=sum((v-mean)**2 for v in vals)/n
+    std=var**0.5
+    cv=std/mean if mean>0 else 0.0
+    maxb=max(vals); minb=min(vals)
+    imb = (maxb/minb) if minb>0 else float('inf') if maxb>0 else 1.0
+    denom = n*sum(v*v for v in vals)
+    fairness = (sum(vals)**2/denom) if denom>0 else 1.0
+    return busy, cv, imb, fairness
+
+def _compute_communication_cost(dag, proc_schedules, communication_matrix, communication_startup=None):
+    task_map={}
+    for p,jobs in proc_schedules.items():
+        for ev in jobs: task_map[ev.task]=ev
+    total=0.0
+    for u,v in dag.edges():
+        if u not in task_map or v not in task_map: continue
+        pu=task_map[u].proc; pv=task_map[v].proc
+        if pu==pv: continue
+        bw = communication_matrix[pu,pv]
+        if bw<=0: continue
+        data = float(dag.get_edge_data(u,v)['weight'])
+        startup = communication_startup[pu] if communication_startup is not None else 0.0
+        total += data / bw + startup
+    return total
+
+def _compute_waiting_time(proc_schedules):
+    total=0.0; count=0
+    for jobs in proc_schedules.values():
+        for ev in jobs:
+            total += ev.start; count+=1
+    return total/count if count else 0.0
 
 if __name__ == "__main__":
-    argparser = generate_argparser()
-    args = argparser.parse_args()
-
-    logger.setLevel(logging.getLevelName(args.loglevel))
-    consolehandler = logging.StreamHandler()
-    consolehandler.setLevel(logging.getLevelName(args.loglevel))
-    consolehandler.setFormatter(logging.Formatter("%(levelname)8s : %(name)16s : %(message)s"))
-    logger.addHandler(consolehandler)
-
-    communication_matrix = readCsvToNumpyMatrix(args.pe_connectivity_file)
-    computation_matrix = readCsvToNumpyMatrix(args.task_execution_file)
-    dag = readDagMatrix(args.dag_file, args.showDAG) 
-    
-    if (communication_matrix.shape[0] != communication_matrix.shape[1]):
-        assert communication_matrix.shape[0]-1 == communication_matrix.shape[1], "If the communication_matrix CSV is non-square, there must only be a single additional row specifying the communication startup costs of each PE"
-        logger.debug("Non-square communication matrix parsed. Stripping off the last row as communication startup costs");
-        communication_startup = communication_matrix[-1, :]
-        communication_matrix = communication_matrix[0:-1, :]
-    else:
-        communication_startup = np.zeros(communication_matrix.shape[0])
-
-    # Power dictionary is required for EDP modes or RankMetric.EDP
-    power_dict = None
-    if args.power_file is not None:
-        power_dict = readCsvToDict(args.power_file)
-
-    if (args.rank_metric == RankMetric.EDP) and power_dict is None:
-        logger.error("RankMetric.EDP requires --power_file specifying a task-by-processor power CSV")
-        sys.exit(2)
-
-    kwargs = { 'rank_metric': args.rank_metric }
-    if power_dict is not None:
-        kwargs['power_dict'] = power_dict
-
-    processor_schedules, _, _ = schedule_dag(
-        dag,
-        communication_matrix=communication_matrix,
-        communication_startup=communication_startup,
-        computation_matrix=computation_matrix,
-        **kwargs
-    )
-    for proc, jobs in processor_schedules.items():
-        logger.info(f"Processor {proc} has the following jobs:")
-        logger.info(f"\t{jobs}")
-    if args.report:
-        # Simplified reporting: Makespan, Load Balance ratio, Communication Cost, Waiting Time, Energy (if power file provided)
-        makespan, _, _ = _compute_makespan_and_idle(processor_schedules)
-        per_proc_busy, _, _, _ = _compute_load_balance(processor_schedules)
-        avg_busy = (sum(per_proc_busy.values()) / len(per_proc_busy)) if per_proc_busy else 0.0
-        load_balance_ratio = (makespan / avg_busy) if avg_busy > 0 else float('inf')
-        communication_cost = _compute_communication_cost(dag, processor_schedules, communication_matrix, communication_startup)
-        waiting_time = _compute_waiting_time(processor_schedules)
-
-        # Energy cost (sum over tasks of duration * power(task,proc)) if power_dict present
-        energy_cost = None
-        if power_dict is not None:
-            energy = 0.0
-            for proc, jobs in processor_schedules.items():
-                for job in jobs:
-                    duration = float(job.end) - float(job.start)
-                    if duration <= 0:
-                        continue
-                    if job.task in power_dict:
-                        try:
-                            task_power = float(power_dict[job.task][job.proc])
-                        except Exception:
-                            task_power = 0.0
-                        energy += duration * task_power
-            energy_cost = energy
-
-        logger.info("")
-        logger.info(f"Makespan: {makespan}")
-        logger.info(f"Load Balance (makespan / average busy time): {load_balance_ratio}")
-        logger.info(f"Communication Cost (sum transfer times): {communication_cost}")
-        logger.info(f"Average Waiting Time (average task start): {waiting_time}")
-        if energy_cost is not None:
-            logger.info(f"Energy Cost (sum duration * power): {energy_cost}")
-
-    if args.showGantt:
-        showGanttChart(processor_schedules)
+    import argparse, os
+    parser = argparse.ArgumentParser(description="Paper-only HEFT (Topcuoglu 2002)")
+    parser.add_argument('--dag_file', required=True)
+    parser.add_argument('--exec_file', required=True)
+    parser.add_argument('--bw_file', required=True)
+    parser.add_argument('--power_file')
+    args = parser.parse_args()
+    comp = readCsvToNumpyMatrix(args.exec_file)
+    bw = readCsvToNumpyMatrix(args.bw_file)
+    dag = readDagMatrix(args.dag_file, show_dag=False)
+    proc_sched, task_sched, _ = schedule_dag(dag, computation_matrix=comp, communication_matrix=bw)
+    makespan,_,_= _compute_makespan_and_idle(proc_sched)
+    busy,_,_,_= _compute_load_balance(proc_sched)
+    avg_busy = sum(busy.values())/len(busy) if busy else 0.0
+    lb_ratio = makespan/avg_busy if avg_busy>0 else float('inf')
+    print({'makespan':makespan,'load_balance_ratio':lb_ratio})
