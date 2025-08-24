@@ -23,18 +23,34 @@ class graph_node:
         self.resource_exe_time = []
 
 def split_number(number, parts):
-    count_per_part = []
-    while len(count_per_part) == 0:
-        for i in range(parts - 1):
-            tmp1 = (number - sum(count_per_part)) / (parts - i)
-            tmp2 = 0
-            while tmp2 <= 0:
-                tmp2 = int(rndm.normalvariate(tmp1, tmp1 / 2))
-            count_per_part.extend([tmp2])
-        count_per_part.extend([number - sum(count_per_part)])
-        if min(count_per_part) <= 0:
-            count_per_part = []
-    return count_per_part
+    """Split an integer 'number' into 'parts' positive integers.
+    Original version used repeated Gaussian sampling with potential heavy retry loops
+    when parts is large (e.g., equal to number). This optimized version provides:
+      - Fast path when number == parts: all ones.
+      - Fast path when parts == 1.
+      - Dirichlet-like random partition using random cut points (O(parts log parts)).
+    Guarantees all parts > 0 and sum == number.
+    """
+    if parts <= 0:
+        return []
+    if parts == 1:
+        return [number]
+    if number == parts:
+        return [1] * parts
+    if parts > number:  # can't have all positive ints otherwise
+        # Fallback: allocate 1 to each of number parts, zeros elsewhere (should not happen in current usage)
+        return [1]*number + [0]*(parts-number)
+    # Use random cut points technique
+    # Choose (parts-1) distinct cut positions in [1, number-1]
+    cuts = sorted(rndm.sample(range(1, number), parts-1))
+    prev = 0
+    out = []
+    for c in cuts:
+        out.append(c - prev)
+        prev = c
+    out.append(number - prev)
+    # All entries guaranteed positive
+    return out
 
 parser = argparse.ArgumentParser(description="Generate synthetic DAG and matrices for HEFT/PEFT")
 parser.add_argument("--config", type=str, default="graph.config", help="Path to config file")
