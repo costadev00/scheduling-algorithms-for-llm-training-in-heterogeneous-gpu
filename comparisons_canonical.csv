@@ -1,0 +1,3 @@
+algorithm,makespan,load_balance_ratio,communication_cost,waiting_time,energy_cost
+HEFT,64.0,1.6842105263157894,89.0,22.8,239.3
+PEFT,54.0,1.2461538461538462,0.0,22.6,281.00000000000006
