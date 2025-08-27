@@ -1,14 +1,16 @@
 # Scheduling Algorithms for Heterogeneous GPU Task Graphs
 
-This project provides clean, paper-faithful Python implementations of two classic heterogeneous DAG scheduling heuristics used to map a task graph onto multiple GPUs / processing elements (PEs):
+This project provides clean, paper-faithful Python implementations of classic heterogeneous DAG scheduling heuristics (plus a simple single‑step lookahead variant) used to map a task graph onto multiple GPUs / processing elements (PEs):
 
 - **HEFT** (Heterogeneous Earliest Finish Time) – Topcuoglu et al., 2002
 - **PEFT** (Predict Earliest Finish Time) – Arabnejad & Barbosa, 2014
+- **DLS** (Dynamic Level Scheduling, DL1 variant) – Sih & Lee, 1993 (characterized by Hagras & Janeček, 2003)
+- **HEFT‑LA** (Lookahead HEFT, 1‑level child EFT sum) – Lightweight extension that scores a candidate processor for task t by EFT(t,p) + Σ predicted earliest child EFTs assuming t placed on p. Demonstrates benefit on high fan‑out / heterogeneous successor patterns.
 
 Both implementations are trimmed to their canonical algorithmic logic (no custom energy-aware heuristics). They expose identical helper utilities for loading CSV inputs and computing schedule quality metrics, enabling fair side‑by‑side evaluation.
 
 ## Project Goal
-Provide a reproducible baseline for comparing HEFT vs. PEFT on heterogeneous GPU task graphs using only the decision rules described in the original papers. This baseline supports research on scheduling for large model (LLM) training pipelines, synthetic DAG benchmarks, and educational exploration of classic list scheduling heuristics.
+Provide a reproducible baseline for comparing HEFT, PEFT, DLS, and an illustrative HEFT lookahead variant (HEFT‑LA) on heterogeneous GPU task graphs using only the decision rules described in the original papers (except the clearly marked optional lookahead). This baseline supports research on scheduling for large model (LLM) training pipelines, synthetic DAG benchmarks, and educational exploration of classic list scheduling heuristics.
 
 ## Input Data Model
 Each workload (DAG scheduling instance) is defined by CSV matrices (with header row + column):
@@ -34,6 +36,20 @@ python -m heft.heft --report --showGantt `
 ```
 
 PEFT (report + optional Gantt chart):
+DLS (DL1 variant; report + optional Gantt chart):
+```powershell
+python -m dls.dls --report --showGantt `
+	--dag_file graphs/canonicalgraph_task_connectivity.csv `
+	--exec_file graphs/canonicalgraph_task_exe_time.csv `
+	--bw_file graphs/canonicalgraph_resource_BW.csv
+```
+
+Unified comparison including DLS and HEFT‑LA:
+```powershell
+python compare_same_dataset.py --dag graphs/canonicalgraph_task_connectivity.csv `
+	--exec graphs/canonicalgraph_task_exe_time.csv --bw graphs/canonicalgraph_resource_BW.csv `
+	--algos HEFT,PEFT,DLS,HEFT-LA --report
+```
 ```powershell
 python -m peft.peft --report --showGantt `
 	-d peft/test/canonicalgraph_task_connectivity.csv `
@@ -83,9 +99,29 @@ HEFT:
 2. Schedule tasks in descending rank; per task choose processor with earliest finish (insertion heuristic).
 
 PEFT:
+DLS (DL1 variant implemented):
+1. Compute static levels SL* using median execution time per task (heterogeneity-aware).
+2. At each step evaluate all (ready task, processor) pairs with DL1(t,p)=SL*(t) - EST(t,p) + (median_exec(t) - exec(t,p)).
+3. Pick pair with maximum DL1 (tie-break: lower EST, task id, processor id) and schedule using insertion-based earliest start.
+4. Recompute dynamic levels and repeat until all tasks scheduled.
 1. Build Optimistic Cost Table (OCT).
 2. Rank = mean OCT row; order by descending rank.
 3. For each task choose processor minimizing (EFT + OCT[task, proc]).
+
+HEFT‑LA (1‑level lookahead variant, not a published algorithm but a didactic extension):
+1. Use the same HEFT upward rank ordering.
+2. For each ready task t and processor p, compute EFT(t,p) via insertion policy.
+3. For each child c of t, temporarily assume t ends at that EFT on p and estimate earliest child finish on its best processor (ignoring contention) => predicted_EFT_child.
+4. Score S(t,p)=EFT(t,p)+Σ predicted_EFT_child; pick p with minimal score (ties: earliest EFT, lower proc id).
+5. Falls back to HEFT behavior when fan‑out is 0 or successors homogeneous.
+
+Lookahead demonstration dataset (graphs/lookahead_graph_*):
+```powershell
+python compare_same_dataset.py --dag graphs/lookahead_graph_task_connectivity.csv `
+	--exec graphs/lookahead_graph_task_exe_time.csv --bw graphs/lookahead_graph_resource_BW.csv `
+	--algos HEFT,HEFT-LA,PEFT,DLS --report --tag lookahead_demo
+```
+Example result (may vary slightly with environment): HEFT makespan 94.5 vs HEFT‑LA 93.5 with markedly lower communication cost due to child‑aware placement of the high fan‑out root.
 
 ## Energy Handling
 Energy is not part of placement logic; if a power matrix is supplied it’s aggregated post‑schedule for reporting only.
@@ -100,6 +136,8 @@ Potential extensions (not included to keep paper fidelity):
 If you use this baseline, cite the original papers:
 - H. Topcuoglu, S. Hariri, M.-Y. Wu, "Performance-Effective and Low-Complexity Task Scheduling for Heterogeneous Computing", IEEE TPDS, 2002.
 - H. Arabnejad, J. Barbosa, "List Scheduling Algorithm for Heterogeneous Systems by an Optimistic Cost Table", IEEE TPDS, 2014.
+- G. C. Sih, E. A. Lee, "A Compile-Time Scheduling Heuristic for Interconnection-Constrained Heterogeneous Processor Architectures", IEEE TPDS (DLS), 1993.
+- T. Hagras, J. Janeček, "Static vs. dynamic list-scheduling performance comparison", Acta Polytechnica, 2003.
 
 ## License
 (Add license information here if applicable.)
