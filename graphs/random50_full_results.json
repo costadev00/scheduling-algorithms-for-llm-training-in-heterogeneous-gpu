@@ -1,0 +1,47 @@
+[
+  {
+    "algorithm": "HEFT",
+    "makespan": 547.2138157894738,
+    "load_balance_ratio": 1.6632638777795552,
+    "communication_cost": 307.6268274853802,
+    "waiting_time": 232.99418859649126,
+    "energy_cost": null,
+    "tag": "random50_full"
+  },
+  {
+    "algorithm": "PEFT",
+    "makespan": 545.5138888888889,
+    "load_balance_ratio": 1.6518210110185887,
+    "communication_cost": 305.88450292397675,
+    "waiting_time": 232.60706140350882,
+    "energy_cost": null,
+    "tag": "random50_full"
+  },
+  {
+    "algorithm": "DLS",
+    "makespan": 547.2138157894738,
+    "load_balance_ratio": 1.6632638777795552,
+    "communication_cost": 307.6268274853802,
+    "waiting_time": 232.99418859649126,
+    "energy_cost": null,
+    "tag": "random50_full"
+  },
+  {
+    "algorithm": "HEFT-LA",
+    "makespan": 547.2138157894738,
+    "load_balance_ratio": 1.6632638777795552,
+    "communication_cost": 307.6268274853802,
+    "waiting_time": 232.99418859649126,
+    "energy_cost": null,
+    "tag": "random50_full"
+  },
+  {
+    "algorithm": "IHEFT",
+    "makespan": 547.2138157894738,
+    "load_balance_ratio": 1.6632638777795552,
+    "communication_cost": 307.6268274853802,
+    "waiting_time": 232.99418859649123,
+    "energy_cost": null,
+    "tag": "random50_full"
+  }
+]

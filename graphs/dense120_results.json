@@ -1,0 +1,47 @@
+[
+  {
+    "algorithm": "HEFT",
+    "makespan": 3175.244284954811,
+    "load_balance_ratio": 3.038511277468719,
+    "communication_cost": 8816.931446039325,
+    "waiting_time": 1540.187638002835,
+    "energy_cost": null,
+    "tag": "dense120"
+  },
+  {
+    "algorithm": "PEFT",
+    "makespan": 3169.175943646996,
+    "load_balance_ratio": 3.0319788984903098,
+    "communication_cost": 8635.89595959595,
+    "waiting_time": 1538.718824206981,
+    "energy_cost": null,
+    "tag": "dense120"
+  },
+  {
+    "algorithm": "DLS",
+    "makespan": 3175.244284954811,
+    "load_balance_ratio": 3.038511277468719,
+    "communication_cost": 8816.931446039325,
+    "waiting_time": 1540.187638002835,
+    "energy_cost": null,
+    "tag": "dense120"
+  },
+  {
+    "algorithm": "HEFT-LA",
+    "makespan": 3169.175943646996,
+    "load_balance_ratio": 3.0312538915801013,
+    "communication_cost": 8716.956512493345,
+    "waiting_time": 1538.7078592947,
+    "energy_cost": null,
+    "tag": "dense120"
+  },
+  {
+    "algorithm": "IHEFT",
+    "makespan": 3175.244284954811,
+    "load_balance_ratio": 3.038511277468719,
+    "communication_cost": 8816.931446039325,
+    "waiting_time": 1540.187638002835,
+    "energy_cost": null,
+    "tag": "dense120"
+  }
+]

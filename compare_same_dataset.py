@@ -46,6 +46,19 @@ try:
 except Exception:
     hla_read_mat = hla_read_dag = hla_read_power = hla_schedule = hla_mk_idle = hla_load = hla_comm = hla_wait = None
 try:
+    from iheft.iheft.iheft import (
+        readCsvToNumpyMatrix as iheft_read_mat,
+        readDagMatrix as iheft_read_dag,
+        readCsvToDict as iheft_read_power,
+        schedule_dag as iheft_schedule,
+        _compute_makespan_and_idle as iheft_mk_idle,
+        _compute_load_balance as iheft_load,
+        _compute_communication_cost as iheft_comm,
+        _compute_waiting_time as iheft_wait,
+    )
+except Exception:
+    iheft_read_mat = iheft_read_dag = iheft_read_power = iheft_schedule = iheft_mk_idle = iheft_load = iheft_comm = iheft_wait = None
+try:
     from dls.dls.dls import (
         readCsvToNumpyMatrix as dls_read_mat,
         readDagMatrix as dls_read_dag,
@@ -169,6 +182,33 @@ def run_algo(name:str, dag_file:str, exec_file:str, bw_file:str, power_file:str|
                         energy += dur*pw
         metrics = dict(algorithm=name, makespan=mk, load_balance_ratio=lb_ratio, communication_cost=comm_cost, waiting_time=wait_t, energy_cost=energy if power else None)
         return (metrics, proc_sched) if return_schedule else metrics
+    elif name == 'IHEFT':
+        if iheft_schedule is None:
+            raise RuntimeError("IHEFT module not available")
+        dag = iheft_read_dag(dag_file, show_dag=False)
+        comp = iheft_read_mat(exec_file)
+        bw = iheft_read_mat(bw_file)
+        power = iheft_read_power(power_file) if power_file else None
+        proc_sched, _, _ = iheft_schedule(dag, computation_matrix=comp, communication_matrix=bw)
+        mk,_,_ = iheft_mk_idle(proc_sched)
+        busy,_,_,_ = iheft_load(proc_sched)
+        avg_busy = (sum(busy.values())/len(busy)) if busy else math.inf
+        lb_ratio = mk/avg_busy if avg_busy>0 else math.inf
+        comm_cost = iheft_comm(dag, proc_sched, bw)
+        wait_t = iheft_wait(proc_sched)
+        energy = 0.0
+        if power:
+            for p,jobs in proc_sched.items():
+                for j in jobs:
+                    dur = float(j.end)-float(j.start)
+                    if dur>0:
+                        try:
+                            pw = float(power[j.task][j.proc])
+                        except Exception:
+                            pw = 0.0
+                        energy += dur*pw
+        metrics = dict(algorithm=name, makespan=mk, load_balance_ratio=lb_ratio, communication_cost=comm_cost, waiting_time=wait_t, energy_cost=energy if power else None)
+        return (metrics, proc_sched) if return_schedule else metrics
     else:
         raise ValueError(f"Unknown algorithm name: {name}")
 
@@ -180,7 +220,7 @@ def main():
     ap.add_argument('--power', help='optional power matrix CSV')
     ap.add_argument('--out_csv', help='optional CSV to append results')
     ap.add_argument('--tag', help='optional dataset/run tag written to CSV')
-    ap.add_argument('--algos', default='HEFT,PEFT', help='comma-separated list of algorithms to run (supported: HEFT,PEFT,DLS,HEFT-LA)')
+    ap.add_argument('--algos', default='HEFT,PEFT', help='comma-separated list of algorithms to run (supported: HEFT,PEFT,DLS,HEFT-LA,IHEFT)')
     ap.add_argument('--showGantt', action='store_true', help='display Gantt chart(s) for each algorithm')
     ap.add_argument('--save_gantt_dir', help='directory to save Gantt PNGs instead of (or in addition to) showing them')
     ap.add_argument('--report', action='store_true', help='print expanded JSON metrics report')
@@ -188,7 +228,7 @@ def main():
     args = ap.parse_args()
 
     algo_list=[a.strip().upper() for a in args.algos.split(',') if a.strip()]
-    unsupported=[a for a in algo_list if a not in {'HEFT','PEFT','DLS','HEFT-LA'}]
+    unsupported=[a for a in algo_list if a not in {'HEFT','PEFT','DLS','HEFT-LA','IHEFT'}]
     if unsupported:
         raise SystemExit(f"Unsupported algorithms requested: {unsupported}")
 

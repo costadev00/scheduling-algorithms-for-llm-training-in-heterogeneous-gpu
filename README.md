@@ -6,6 +6,7 @@ This project provides clean, paper-faithful Python implementations of classic he
 - **PEFT** (Predict Earliest Finish Time) – Arabnejad & Barbosa, 2014
 - **DLS** (Dynamic Level Scheduling, DL1 variant) – Sih & Lee, 1993 (characterized by Hagras & Janeček, 2003)
 - **HEFT‑LA** (Lookahead HEFT, 1‑level child EFT sum) – Lightweight extension that scores a candidate processor for task t by EFT(t,p) + Σ predicted earliest child EFTs assuming t placed on p. Demonstrates benefit on high fan‑out / heterogeneous successor patterns.
+- **IHEFT** (Improved HEFT from provided paper) – Modified upward rank using heterogeneity Weight_ni and a stochastic cross-over rule between global EFT-minimizing processor and local fastest-exec processor based on dynamic threshold.
 
 Both implementations are trimmed to their canonical algorithmic logic (no custom energy-aware heuristics). They expose identical helper utilities for loading CSV inputs and computing schedule quality metrics, enabling fair side‑by‑side evaluation.
 
@@ -44,11 +45,11 @@ python -m dls.dls --report --showGantt `
 	--bw_file graphs/canonicalgraph_resource_BW.csv
 ```
 
-Unified comparison including DLS and HEFT‑LA:
+Unified comparison including DLS, HEFT‑LA and IHEFT:
 ```powershell
 python compare_same_dataset.py --dag graphs/canonicalgraph_task_connectivity.csv `
 	--exec graphs/canonicalgraph_task_exe_time.csv --bw graphs/canonicalgraph_resource_BW.csv `
-	--algos HEFT,PEFT,DLS,HEFT-LA --report
+	--algos HEFT,PEFT,DLS,HEFT-LA,IHEFT --report
 ```
 ```powershell
 python -m peft.peft --report --showGantt `
@@ -116,6 +117,14 @@ HEFT‑LA (1‑level lookahead variant, not a published algorithm but a didactic
 5. Falls back to HEFT behavior when fan‑out is 0 or successors homogeneous.
 
 Lookahead demonstration dataset (graphs/lookahead_graph_*):
+IHEFT (Improved HEFT):
+1. Compute Weight_ni = | (max_exec_i - min_exec_i) / (max_exec_i / min_exec_i) | per task capturing heterogeneity dispersion.
+2. Modified upward rank: rank_i = Weight_ni + max_{succ j} ( normalized_comm_{i,j} + rank_j ).
+3. Order tasks by decreasing rank.
+4. For each task evaluate insertion-based EFT on all processors; record processor with minimum execution time separately.
+5. If both processors identical choose it; else compute Weight_abstract = | (EFT_best - EFT_execBest) / (EFT_best / EFT_execBest) | and Cross_Threshold = Weight_ni / Weight_abstract.
+6. Draw r ~ Uniform[0.1,0.3]; if Cross_Threshold <= r select fastest-exec processor (local); else select min-EFT (global).
+Stochastic element can yield schedules equal to or different from canonical HEFT; seed fixed (42) for reproducibility in current implementation.
 ```powershell
 python compare_same_dataset.py --dag graphs/lookahead_graph_task_connectivity.csv `
 	--exec graphs/lookahead_graph_task_exe_time.csv --bw graphs/lookahead_graph_resource_BW.csv `
