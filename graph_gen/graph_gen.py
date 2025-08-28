@@ -55,7 +55,7 @@ def split_number(number, parts):
 parser = argparse.ArgumentParser(description="Generate synthetic DAG and matrices for HEFT/PEFT")
 parser.add_argument("--config", type=str, default="graph.config", help="Path to config file")
 parser.add_argument("--out", type=str, default=".", help="Output directory for CSVs")
-parser.add_argument("--prefix", type=str, default="graph", help="Filename prefix for generated CSVs (use {i} if using --repeat)")
+parser.add_argument("--prefix", type=str, default="graph", help="Filename prefix for generated CSVs (no scenario expansion)")
 # Optional overrides (if omitted, config values used)
 parser.add_argument("--RC", type=int, help="Override resource count")
 parser.add_argument("--GH", type=int, help="Override graph height")
@@ -68,7 +68,7 @@ parser.add_argument("--CDR_HIGH", type=int, help="Override communication data si
 parser.add_argument("--LBW_LOW", type=int, help="Override link bandwidth range low bound")
 parser.add_argument("--LBW_HIGH", type=int, help="Override link bandwidth range high bound")
 parser.add_argument("--SEED", type=int, help="Override base seed")
-parser.add_argument("--repeat", type=int, default=1, help="Generate N scenarios (increments seed, substitutes {i} in prefix)")
+parser.add_argument("--repeat", type=int, default=1, help="[DEPRECATED] Previously generated multiple scenarios. Ignored; always 1.")
 args = parser.parse_args()
 
 config_path = args.config
@@ -264,11 +264,13 @@ def generate_one(seed, px):
     with open(os.path.join(out_dir, f"{px}_task_exe_time.csv"), "w", newline="") as f:
         csv.writer(f).writerows(rows)
 
-# Single or repeated generation
-for i in range(args.repeat):
-    seed_i = SEED + i if args.repeat > 1 else SEED
-    if args.repeat > 1:
-        px = prefix.format(i=i) if "{i}" in prefix else f"{prefix}_{i}"
-    else:
-        px = prefix
-    generate_one(seed_i, px)
+# Deprecated multi-scenario logic removed. Always generate a single set of files.
+if args.repeat and args.repeat > 1:
+    print(f"[WARN] --repeat={args.repeat} requested but multi-scenario generation is disabled. Generating a single graph only.")
+
+# Sanitize any legacy {i} placeholder in prefix
+if "{i}" in prefix:
+    print("[INFO] Removing '{i}' placeholder from prefix for single generation mode.")
+    prefix = prefix.replace("{i}", "")
+
+generate_one(SEED, prefix)
