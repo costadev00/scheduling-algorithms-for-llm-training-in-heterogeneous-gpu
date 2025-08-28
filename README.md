@@ -7,6 +7,7 @@ This project provides clean, paper-faithful Python implementations of classic he
 - **DLS** (Dynamic Level Scheduling, DL1 variant) – Sih & Lee, 1993 (characterized by Hagras & Janeček, 2003)
 - **HEFT‑LA** (Lookahead HEFT, 1‑level child EFT sum) – Lightweight extension that scores a candidate processor for task t by EFT(t,p) + Σ predicted earliest child EFTs assuming t placed on p. Demonstrates benefit on high fan‑out / heterogeneous successor patterns.
 - **IHEFT** (Improved HEFT from provided paper) – Modified upward rank using heterogeneity Weight_ni and a stochastic cross-over rule between global EFT-minimizing processor and local fastest-exec processor based on dynamic threshold.
+- **IPEFT** (Improved PEFT; dual pessimistic / critical-node cost tables) – Extends PEFT by blending pessimistic and critical-successor–focused continuation costs (PCT & CNCT) plus average earliest/latest start analysis to emphasize likely critical path nodes when ranking and selecting processors.
 
 Both implementations are trimmed to their canonical algorithmic logic (no custom energy-aware heuristics). They expose identical helper utilities for loading CSV inputs and computing schedule quality metrics, enabling fair side‑by‑side evaluation.
 
@@ -49,7 +50,7 @@ Unified comparison including DLS, HEFT‑LA and IHEFT:
 ```powershell
 python compare_same_dataset.py --dag graphs/canonicalgraph_task_connectivity.csv `
 	--exec graphs/canonicalgraph_task_exe_time.csv --bw graphs/canonicalgraph_resource_BW.csv `
-	--algos HEFT,PEFT,DLS,HEFT-LA,IHEFT --report
+	--algos HEFT,PEFT,DLS,HEFT-LA,IHEFT,IPEFT --report
 ```
 ```powershell
 python -m peft.peft --report --showGantt `
@@ -132,6 +133,22 @@ python compare_same_dataset.py --dag graphs/lookahead_graph_task_connectivity.cs
 ```
 Example result (may vary slightly with environment): HEFT makespan 94.5 vs HEFT‑LA 93.5 with markedly lower communication cost due to child‑aware placement of the high fan‑out root.
 
+IPEFT (Improved PEFT):
+1. Precompute average execution time per task (used in several averages) and average communication cost (edge load / mean bandwidth) for normalized continuity.
+2. For each task compute AEST (Average Earliest Start Time) and ALST (Average Latest Start Time) by propagating mean start bounds forward/backward over processors; this yields slack windows identifying potentially critical successors (low slack = high criticality).
+3. Identify critical successors of each task: a child is critical if its (ALST - AEST) slack is below a small epsilon (implementation uses numerical tolerance) or minimal among its sibling set.
+4. Build Pessimistic Cost Table (PCT): PCT[i,p] = exec(i,p) + max_{succ j} ( max_{q} ( comm(i,j,p,q) + PCT[j,q] ) ). This assumes worst-case (slowest) continuation across children & processors, biasing ranks toward tasks whose worst descendant chains are long.
+5. Build Critical-Node Cost Table (CNCT): Similar recursion but considers only critical successors and takes for each critical successor the best continuation processor: CNCT[i,p] = exec(i,p) + max_{crit succ j} ( min_{q} ( comm(i,j,p,q) + CNCT[j,q] ) ). If no critical successors, CNCT[i,p] = exec(i,p).
+6. Rank (rankPCT) of task i = mean_p PCT[i,p] + mean execution time of i (adds intrinsic weight; mirrors provided specification).
+7. Order tasks by decreasing rankPCT (list scheduling order).
+8. For each ready task, evaluate insertion-based Earliest Finish Time (EFT) on every processor. Compute EFTCNCT score = EFT + mean_{p}( CNCT[i,p] ) - CNCT[i,processor] (implementation variant equivalent to including continuation bias) OR directly EFT + CNCT[i,processor] (selected form per provided specification). Current implementation uses EFT + CNCT[i,p] and chooses the processor minimizing this blended cost; ties broken by earlier EFT then lower processor id.
+9. Insert task at earliest legal start (respecting precedence & existing reservations) as in HEFT/PEFT.
+10. Proceed until all tasks scheduled; metrics reported identically.
+
+Differences vs PEFT: PEFT relies on a single optimistic (best-continuation) OCT table and ranks via its row mean; IPEFT introduces dual pessimistic (PCT) and critical-focused (CNCT) tables plus critical-successor filtering via AEST/ALST slack, aiming to improve discrimination on true critical path tasks while still guarding against worst-case branching.
+
+Empirical note (included example runs in this repo): On a dense 120-task synthetic graph IPEFT produced a slightly higher makespan than PEFT in one seed (reflecting heuristic variability) but reduced load imbalance. Behavior will vary with communication heterogeneity; further tuning of slack threshold or CNCT blending may improve results.
+
 ## Energy Handling
 Energy is not part of placement logic; if a power matrix is supplied it’s aggregated post‑schedule for reporting only.
 
@@ -147,6 +164,7 @@ If you use this baseline, cite the original papers:
 - H. Arabnejad, J. Barbosa, "List Scheduling Algorithm for Heterogeneous Systems by an Optimistic Cost Table", IEEE TPDS, 2014.
 - G. C. Sih, E. A. Lee, "A Compile-Time Scheduling Heuristic for Interconnection-Constrained Heterogeneous Processor Architectures", IEEE TPDS (DLS), 1993.
 - T. Hagras, J. Janeček, "Static vs. dynamic list-scheduling performance comparison", Acta Polytechnica, 2003.
+- (Add citation for the IPEFT improvement paper once bibliographic details are finalized.)
 
 ## License
 (Add license information here if applicable.)

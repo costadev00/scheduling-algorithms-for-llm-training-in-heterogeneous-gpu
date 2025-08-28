@@ -59,6 +59,19 @@ try:
 except Exception:
     iheft_read_mat = iheft_read_dag = iheft_read_power = iheft_schedule = iheft_mk_idle = iheft_load = iheft_comm = iheft_wait = None
 try:
+    from ipeft.ipeft.ipeft import (
+        readCsvToNumpyMatrix as ipeft_read_mat,
+        readDagMatrix as ipeft_read_dag,
+        readCsvToDict as ipeft_read_power,
+        schedule_dag as ipeft_schedule,
+        _compute_makespan_and_idle as ipeft_mk_idle,
+        _compute_load_balance as ipeft_load,
+        _compute_communication_cost as ipeft_comm,
+        _compute_waiting_time as ipeft_wait,
+    )
+except Exception:
+    ipeft_read_mat = ipeft_read_dag = ipeft_read_power = ipeft_schedule = ipeft_mk_idle = ipeft_load = ipeft_comm = ipeft_wait = None
+try:
     from dls.dls.dls import (
         readCsvToNumpyMatrix as dls_read_mat,
         readDagMatrix as dls_read_dag,
@@ -209,6 +222,33 @@ def run_algo(name:str, dag_file:str, exec_file:str, bw_file:str, power_file:str|
                         energy += dur*pw
         metrics = dict(algorithm=name, makespan=mk, load_balance_ratio=lb_ratio, communication_cost=comm_cost, waiting_time=wait_t, energy_cost=energy if power else None)
         return (metrics, proc_sched) if return_schedule else metrics
+    elif name == 'IPEFT':
+        if ipeft_schedule is None:
+            raise RuntimeError("IPEFT module not available")
+        dag = ipeft_read_dag(dag_file, show_dag=False)
+        comp = ipeft_read_mat(exec_file)
+        bw = ipeft_read_mat(bw_file)
+        power = ipeft_read_power(power_file) if power_file else None
+        proc_sched, _, _ = ipeft_schedule(dag, computation_matrix=comp, communication_matrix=bw)
+        mk,_,_ = ipeft_mk_idle(proc_sched)
+        busy,_,_,_ = ipeft_load(proc_sched)
+        avg_busy = (sum(busy.values())/len(busy)) if busy else math.inf
+        lb_ratio = mk/avg_busy if avg_busy>0 else math.inf
+        comm_cost = ipeft_comm(dag, proc_sched, bw)
+        wait_t = ipeft_wait(proc_sched)
+        energy = 0.0
+        if power:
+            for p,jobs in proc_sched.items():
+                for j in jobs:
+                    dur = float(j.end)-float(j.start)
+                    if dur>0:
+                        try:
+                            pw = float(power[j.task][j.proc])
+                        except Exception:
+                            pw = 0.0
+                        energy += dur*pw
+        metrics = dict(algorithm=name, makespan=mk, load_balance_ratio=lb_ratio, communication_cost=comm_cost, waiting_time=wait_t, energy_cost=energy if power else None)
+        return (metrics, proc_sched) if return_schedule else metrics
     else:
         raise ValueError(f"Unknown algorithm name: {name}")
 
@@ -220,19 +260,33 @@ def main():
     ap.add_argument('--power', help='optional power matrix CSV')
     ap.add_argument('--out_csv', help='optional CSV to append results')
     ap.add_argument('--tag', help='optional dataset/run tag written to CSV')
-    ap.add_argument('--algos', default='HEFT,PEFT', help='comma-separated list of algorithms to run (supported: HEFT,PEFT,DLS,HEFT-LA,IHEFT)')
+    ap.add_argument('--algos', default='HEFT,PEFT', help='comma-separated list of algorithms to run (supported: HEFT,PEFT,DLS,HEFT-LA,IHEFT,IPEFT)')
     ap.add_argument('--showGantt', action='store_true', help='display Gantt chart(s) for each algorithm')
     ap.add_argument('--save_gantt_dir', help='directory to save Gantt PNGs instead of (or in addition to) showing them')
     ap.add_argument('--report', action='store_true', help='print expanded JSON metrics report')
     ap.add_argument('--json_out', help='optional JSON file to write full metrics list')
+    ap.add_argument('--showDAG', action='store_true', help='display the DAG structure (once) before scheduling')
     args = ap.parse_args()
 
     algo_list=[a.strip().upper() for a in args.algos.split(',') if a.strip()]
-    unsupported=[a for a in algo_list if a not in {'HEFT','PEFT','DLS','HEFT-LA','IHEFT'}]
+    unsupported=[a for a in algo_list if a not in {'HEFT','PEFT','DLS','HEFT-LA','IHEFT','IPEFT'}]
     if unsupported:
         raise SystemExit(f"Unsupported algorithms requested: {unsupported}")
 
     rows=[]; schedules={}
+    # Optional DAG visualization (use first available reader)
+    if args.showDAG:
+        shown=False
+        for reader in [heft_read_dag, peft_read_dag, dls_read_dag, hla_read_dag, iheft_read_dag, ipeft_read_dag]:
+            try:
+                if reader is None: continue
+                reader(args.dag, show_dag=True)
+                shown=True
+                break
+            except Exception:
+                continue
+        if not shown:
+            print('Warning: could not display DAG (no reader succeeded).')
     for algo in algo_list:
         res = run_algo(algo, args.dag, args.exec_file, args.bw, args.power, return_schedule=args.showGantt or args.save_gantt_dir is not None)
         if isinstance(res, tuple):
