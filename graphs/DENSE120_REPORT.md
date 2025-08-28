@@ -4,16 +4,16 @@ Tag: `dense120`
 Tasks: 120  |  Processors: 4  |  Edge probability: 0.55 (high connectivity)
 Execution time range: 5–160  |  Communication weight range: 5–80
 
-| Algorithm | Makespan | Load Balance Ratio | Communication Cost | Avg Waiting Time |
-|-----------|----------|--------------------|--------------------|------------------|
-| HEFT      | 3175.244 | 3.03851            | 8816.93            | 1540.188         |
-| PEFT      | 3169.176 | 3.03198            | 8635.90            | 1538.719         |
-| DLS       | 3175.244 | 3.03851            | 8816.93            | 1540.188         |
-| HEFT-LA   | 3169.176 | 3.03125            | 8716.96            | 1538.708         |
-| IHEFT     | 3175.244 | 3.03851            | 8816.93            | 1540.188         |
-| IPEFT     | 3171.449 | 3.03270            | 8767.41            | 1538.858         |
+| Algorithm | Makespan | Load Balance Ratio | Communication Cost | Avg Waiting Time | Energy Cost |
+|-----------|----------|--------------------|--------------------|------------------|-------------|
+| HEFT      | 3175.244 | 3.03851            | 8816.93            | 1540.188         | 9485.73     |
+| PEFT      | 3169.176 | 3.03198            | 8635.90            | 1538.719         | 9587.55     |
+| DLS       | 3175.244 | 3.03851            | 8816.93            | 1540.188         | 9485.73     |
+| HEFT-LA   | 3169.176 | 3.03125            | 8716.96            | 1538.708         | 9577.85     |
+| IHEFT     | 3175.244 | 3.03851            | 8816.93            | 1540.188         | 9485.73     |
+| IPEFT     | 3171.449 | 3.03270            | 8767.41            | 1538.858         | 9528.05     |
 
-(Values rounded; energy not computed.)
+(Values rounded; energy included using constant per-task processor power from mean reciprocal execution time.)
 
 ## Observations
 - PEFT and HEFT-LA obtain the best makespan (≈6.07 units, ~0.19% faster than HEFT baseline). IPEFT lands in between (improves makespan vs HEFT by ~3.80 units) on this instance.
