@@ -69,14 +69,6 @@ Printed for both algorithms:
 - Average waiting time (mean task start)
 - (If power CSV provided) Energy = Σ(duration × power)
 
-### Scenario Evaluations
-Scenario 3 (example large DAG comparison) regeneration:
-```powershell
-python summarize_scenario3.py
-python "graphs/scenario 3/scenario3_plots.py"
-```
-This produces `graphs/scenario 3/scenario3_summary.csv` and plot PNGs plus an updated `SCENARIO3_REPORT.md`.
-
 ## Testing
 Lightweight tests validate metric helpers:
 ```powershell
@@ -91,8 +83,7 @@ heft/
 	heft/dag_merge.py   # (Optional) DAG merge utilities for multi-workflow experiments
 peft/
 	peft/peft.py        # Canonical PEFT implementation
-graphs/               # Scenario input CSVs + generated plots/reports
-summarize_scenario*.py# Scenario scripts (aggregate metrics across resource counts)
+graphs/               # Input CSVs + generated plots/reports
 ```
 
 ## Algorithm Summary
