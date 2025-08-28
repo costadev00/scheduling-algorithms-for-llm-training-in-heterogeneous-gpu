@@ -1,16 +1,23 @@
 from __future__ import annotations
-"""Paper-faithful Dynamic Level Scheduling (DLS) implementation (Sih & Lee 1993; characterized by Hagras & Janeček 2003).
+"""Dynamic Level Scheduling (DLS) – paper-faithful DL1 variant (Sih & Lee, IEEE TPDS 1993).
 
-Core implemented variant (homogeneous baseline + heterogeneous extension DL1):
-  Static Level SL(v) = w_avg(v) + max_{s in succ(v)} SL(s), with SL(exit)=w_avg(exit)
-  For heterogeneity we use median execution time per task (adjusted median ~ paper) -> w_med(v)
-  Start time candidate for task t on processor p: EST(t,p) = max( DA(t,p), TF(p) )
-  Dynamic Level (homogeneous form): DL(t,p) = SL(t) - EST(t,p)
-  Heterogeneous extension (DL1): DL1(t,p) = SL*(t) - EST(t,p) + A(t,p)
-     where A(t,p) = E*(t) - E(t,p) ; E*(t)=median exec time of task t across processors.
-Selection rule each step: choose (t,p) pair with maximum DL1 (tie-break: lower EST, then lower task id, then lower proc id) and schedule at earliest feasible start (insertion permitting gaps like HEFT / PEFT). Recompute for remaining tasks.
-Communication time: data / bandwidth (0 if same processor). Startup ignored.
-Energy not used in scheduling; can be computed externally.
+Key characteristics implemented here (differences vs earlier HEFT-like version):
+    * CPU placement has NO gap insertion: task starts at max(DA(t,p), TF(p)), where TF(p) is
+        the finish time of the last task already assigned to processor p.
+    * Communication contention is modelled via per-(src,dst) LINK RESERVATIONS. Each data
+        transfer reserves the earliest non-overlapping window of length data/bandwidth
+        starting no earlier than the finish time of the source task. DA(t,p) is the max over
+        predecessors of their (finish time + reserved communication window). Same-processor
+        predecessors contribute their finish time (no comm).
+    * Static levels SL* use the ADJUSTED MEDIAN execution time per task (if the statistical
+        median would be inf, use the largest finite execution time) matching the paper's
+        handling of infeasible processors.
+    * DL1(t,p) = SL*(t) - EST(t,p) + (E*(t) - E(t,p)) with EST = max(DA, TF).
+
+Not implemented (extensions left as future work): descendant correction term (DL2), and
+the generalized dynamic level (GDL) scarcity adjustment.
+
+Tie-breaking: higher DL1, then smaller EST, then lower task id, then lower proc id.
 """
 from dataclasses import dataclass
 from typing import Dict, List
@@ -34,7 +41,7 @@ def readDagMatrix(dag_file: str, show_dag: bool=False):
     import matplotlib.pyplot as plt
     m=readCsvToNumpyMatrix(dag_file)
     dag=nx.DiGraph(m)
-    dag.remove_edges_from([e for e in dag.edges() if dag.get_edge_data(*e)['weight']=='0.0'])
+    dag.remove_edges_from([e for e in dag.edges() if float(dag.get_edge_data(*e)['weight'])==0.0])
     if show_dag:
         try:
             pos=nx.nx_pydot.graphviz_layout(dag, prog='dot')
@@ -44,11 +51,18 @@ def readDagMatrix(dag_file: str, show_dag: bool=False):
         plt.show()
     return dag
 
-def _median_exec(comp:np.ndarray, t:int)->float:
-    return float(np.median(comp[t]))
+def _adjusted_median_exec(comp:np.ndarray, t:int)->float:
+    """Adjusted median E*(t) per paper: median over full row (including inf). If median is inf,
+    substitute largest finite exec time (if any); if none finite, return inf."""
+    row=comp[t]
+    med=np.median(row)
+    if np.isfinite(med):
+        return float(med)
+    finite=row[np.isfinite(row)]
+    return float(np.max(finite)) if finite.size else float('inf')
 
 def _compute_static_levels(comp:np.ndarray, dag:nx.DiGraph)->Dict[int,float]:
-    # using median exec time for heterogeneity (SL*)
+    # using adjusted median exec time for heterogeneity (SL*)
     sinks=[n for n in dag.nodes() if dag.out_degree(n)==0]
     if not sinks: raise ValueError("DAG has no sink")
     if len(sinks)>1:
@@ -66,7 +80,7 @@ def _compute_static_levels(comp:np.ndarray, dag:nx.DiGraph)->Dict[int,float]:
         if n==sink and n>=comp.shape[0]:
             val=0.0
         else:
-            base=_median_exec(comp,n) if n < comp.shape[0] else 0.0
+            base=_adjusted_median_exec(comp,n) if n < comp.shape[0] else 0.0
             if succs:
                 val=base+max(SL[s] for s in succs)
             else:
@@ -76,44 +90,83 @@ def _compute_static_levels(comp:np.ndarray, dag:nx.DiGraph)->Dict[int,float]:
             if p not in SL: pending.append(p)
     return SL
 
-def _earliest_data_arrival(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent]):
-    ready=0.0
+def _find_earliest_comm_start(intervals:List[tuple], ready:float, dur:float)->float:
+    """Return earliest start >= ready for an interval of length dur given existing sorted intervals."""
+    start=ready
+    for s,e in intervals:
+        if start + dur <= s:
+            break  # fits before this interval
+        if start < e:
+            start = e  # push after overlap
+    return start
+
+def _simulate_data_arrival(task:int, dest_proc:int, dag:nx.DiGraph, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent], link_schedules:Dict, route_fn):
+    """Compute DA(t,dest_proc) and tentative communication reservation plan without mutating state.
+    route_fn(src,dst) -> list of link identifiers to reserve as a path. For a fully switched
+    crossbar you can return [(src,dst)] to emulate per-pair dedicated links.
+    Returns (data_avail, plan) with plan list entries (pred, links_list, start, end).
+    If any predecessor requires an infeasible transfer (no finite bw) => returns (inf, [])."""
+    data_avail=0.0
+    plan=[]
     for pred in dag.predecessors(task):
         ev=task_sched[pred]
-        if ev.proc==proc: arrival=ev.end
+        if ev.proc == dest_proc:
+            arrival=ev.end
         else:
-            bw=comm[ev.proc, proc]
+            src=ev.proc; dst=dest_proc
             data=float(dag[pred][task]['weight'])
-            comm_t=data / bw if bw>0 else 0.0
-            arrival=ev.end+comm_t
-        if arrival>ready: ready=arrival
-    return ready
+            if data==0:
+                arrival=ev.end
+            else:
+                bw=comm[src,dst]
+                if bw <= 0:
+                    return float('inf'), []  # infeasible path (no bandwidth entry)
+                dur=data / bw
+                links = route_fn(src,dst)
+                start_candidate=ev.end
+                start=start_candidate
+                while True:
+                    adjusted=start
+                    for link in links:
+                        intervals=link_schedules[link]
+                        adjusted=_find_earliest_comm_start(intervals, adjusted, dur)
+                    if adjusted==start:  # stable => all links free concurrently
+                        start=adjusted; break
+                    start=adjusted
+                end=start+dur
+                plan.append((pred, links, start, end))
+                arrival=end
+        if arrival>data_avail: data_avail=arrival
+    return data_avail, plan
 
-def _insertion_place(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent], proc_sched:Dict[int,List[ScheduleEvent]]):
-    data_avail=_earliest_data_arrival(task, proc, dag, comp, comm, task_sched)
-    jobs=proc_sched[proc]
-    dur=float(comp[task,proc])
-    # scan gaps similar to HEFT for earliest start >= data_avail
-    best=ScheduleEvent(task, data_avail, data_avail+dur, proc)
-    for i,j in enumerate(jobs):
-        # gap before first
-        if i==0 and j.start - data_avail >= dur:
-            cand=ScheduleEvent(task, data_avail, data_avail+dur, proc)
-            if cand.end < best.end: best=cand
-        if i < len(jobs)-1:
-            nxt=jobs[i+1]
-            gap_start=max(data_avail, j.end); gap_end=nxt.start
-            if gap_end - gap_start >= dur:
-                cand=ScheduleEvent(task, gap_start, gap_start+dur, proc)
-                if cand.end < best.end: best=cand
-        if i==len(jobs)-1:
-            start=max(data_avail, j.end)
-            cand=ScheduleEvent(task, start, start+dur, proc)
-            if cand.end < best.end: best=cand
-    return best
+def _commit_comm_plan(plan:List[tuple], link_schedules:Dict):
+    for _, links, s, e in plan:
+        for link in links:
+            lst=link_schedules[link]
+            idx=0
+            while idx < len(lst) and lst[idx][0] <= s:
+                idx += 1
+            lst.insert(idx,(s,e))
 
-def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=None, use_dl1:bool=True, **kwargs):
+def _tail_place(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent], proc_sched:Dict[int,List[ScheduleEvent]], link_schedules, route_fn):
+    data_avail, plan = _simulate_data_arrival(task, proc, dag, comm, task_sched, link_schedules, route_fn)
+    tf = max((ev.end for ev in proc_sched[proc]), default=0.0)
+    start = max(data_avail, tf)
+    dur = float(comp[task, proc])
+    return ScheduleEvent(task, start, start+dur, proc), data_avail, plan
+
+def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=None, use_dl1:bool=True, route_fn=None, **kwargs):
     if proc_schedules is None: proc_schedules={p:[] for p in range(communication_matrix.shape[0])}
+    # link_schedules[(src,dst)] = sorted list of (start,end) reservations
+    link_schedules={}
+    P=communication_matrix.shape[0]
+    if route_fn is None:
+        def route_fn(i,j): return [(i,j)] if i!=j else []
+    for i in range(P):
+        for j in range(P):
+            if i==j: continue
+            for link in route_fn(i,j):
+                link_schedules.setdefault(link, [])
     SL=_compute_static_levels(computation_matrix, dag)
     tasks=[n for n in dag.nodes() if n < computation_matrix.shape[0]]
     ready=set(t for t in tasks if dag.in_degree(t)==0)
@@ -123,12 +176,12 @@ def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=N
         avail=[t for t in tasks if t not in task_sched and all(pred in task_sched for pred in dag.predecessors(t))]
         if not avail:
             raise RuntimeError("Deadlock in DLS (cyclic DAG?)")
-        best_pair=None; best_dl=None; best_placement=None; best_est=None
-        median_exec_cache={t:_median_exec(computation_matrix,t) for t in avail}
+        best_pair=None; best_dl=None; best_placement=None; best_est=None; best_plan=[]
+        median_exec_cache={t:_adjusted_median_exec(computation_matrix,t) for t in avail}
         for t in avail:
             for p in range(communication_matrix.shape[0]):
-                placement=_insertion_place(t,p,dag,computation_matrix,communication_matrix,task_sched,proc_schedules)
-                est=placement.start
+                placement, data_avail, plan = _tail_place(t,p,dag,computation_matrix,communication_matrix,task_sched,proc_schedules, link_schedules, route_fn)
+                est=placement.start  # EST = max(DA, TF) already folded into placement
                 # DL components
                 SL_t=SL[t]
                 if use_dl1:
@@ -138,13 +191,15 @@ def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=N
                 else:
                     dl = SL_t - est
                 if best_pair is None or dl > best_dl or (dl==best_dl and (est < best_est or (est==best_est and (t < best_pair[0] or (t==best_pair[0] and p < best_pair[1]))))):
-                    best_pair=(t,p); best_dl=dl; best_placement=placement; best_est=est
+                    best_pair=(t,p); best_dl=dl; best_placement=placement; best_est=est; best_plan=plan
         # commit selection
         t_sel,p_sel=best_pair
         ev=best_placement
         proc_schedules[p_sel].append(ev)
         proc_schedules[p_sel].sort(key=lambda j:j.start)
         task_sched[t_sel]=ev
+        # reserve the communication windows now (only those associated with chosen processor)
+        _commit_comm_plan(best_plan, link_schedules)
     return proc_schedules, task_sched, {"static_levels":SL}
 
 def _compute_makespan_and_idle(proc_schedules):

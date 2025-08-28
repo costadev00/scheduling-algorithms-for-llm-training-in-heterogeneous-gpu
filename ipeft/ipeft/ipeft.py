@@ -1,10 +1,17 @@
 """Paper-based IPEFT implementation.
 
-Improvements over PEFT:
-- Replaces single Optimistic Cost Table (OCT) with two tables: PCT (pessimistic) and CNCT (critical-node cost).
-- Uses precomputed AEST/ALST to classify critical successors (CN) and critical predecessor nodes (CNP) logic.
-- Rank = avg PCT row + average computation cost.
-- Processor selection minimizes EFTCNCT = EFT (+ CNCT unless CNP case).
+Key features vs PEFT:
+    * Dual tables: PCT (pessimistic) + CNCT (critical-node constrained) instead of single OCT.
+    * AEST / ALST based identification of Critical Nodes (CN) and Critical Node Parents (CNP).
+    * Rank(t) = mean(PCT[t,*]) + avg_exec_time(t).
+    * Processor selection minimizes EFT (+ CNCT penalty unless task is CNP).
+
+Recent correctness fixes:
+    * Proper ALST initialization across multiple exits: exits no longer all forced critical; ALST exit values set using global makespan T (see _compute_AEST_ALST).
+    * Deterministic ready tie-breaking: (rank, out_degree, -task_id).
+    * Defensive handling of zero-bandwidth edges: scheduling on a processor with unreachable comm path yields infinite EFT (pruned by selection).
+    * Input shape assertions to catch mismatches early.
+    * Removed unused avg-comm helpers.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -51,50 +58,49 @@ def readDagMatrix(dag_file: str, show_dag: bool=False):
 def _avg_exec(comp:np.ndarray, t:int)->float:
     return float(np.mean(comp[t])) if t < comp.shape[0] else 0.0
 
-def _avg_comm(comm:np.ndarray)->float:
-    mask=np.ones_like(comm, dtype=bool); np.fill_diagonal(mask, False)
-    vals=comm[mask]; vals=vals[vals>0]
-    return float(np.mean(vals)) if len(vals) else 1.0
-
 def _avg_comm_time_per_unit(comm:np.ndarray)->float:
     """Mean of reciprocals of bandwidths (expected time per unit data across random processor pair)."""
     mask=np.ones_like(comm, dtype=bool); np.fill_diagonal(mask, False)
     bw=comm[mask]; bw=bw[bw>0]
     return float(np.mean(1.0/bw)) if len(bw) else 1.0
 
-def _precompute_avg_comm_matrix(dag:nx.DiGraph, comm:np.ndarray)->float:
-    return _avg_comm(comm)
-
 def _compute_AEST_ALST(dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray):
-    # Average communication time per unit = mean(1 / BW[p,q]) over p!=q (more exact than 1/mean(BW))
-    avg_time=_avg_comm_time_per_unit(comm)
-    avg_w={t:_avg_exec(comp,t) for t in dag.nodes() if t < comp.shape[0]}
-    avg_c={}  # (u,v)-> average communication time (data * mean reciprocal bandwidth)
-    for u,v in dag.edges():
-        w=float(dag[u][v]['weight']); avg_c[(u,v)] = w * avg_time
-    # AEST forward
+    """Compute AEST / ALST using average execution and communication times.
+
+    Critical fix: For multiple exits, ALST for exits must be derived from global makespan T so
+    that only true critical nodes satisfy AEST==ALST, preventing all exits being misclassified as CN.
+    """
+    # Average time per unit data: mean of reciprocals
+    mask=np.ones_like(comm, dtype=bool); np.fill_diagonal(mask, False)
+    bw=comm[mask]; bw=bw[bw>0]
+    avg_time=float(np.mean(1.0/bw)) if len(bw) else 1.0
+    avg_w={t: float(np.mean(comp[t])) if t < comp.shape[0] else 0.0 for t in dag.nodes()}
+    avg_c={(u,v): float(dag[u][v]['weight']) * avg_time for u,v in dag.edges()}
+    # Forward AEST (longest with avg costs)
     from collections import deque
     indeg={n:dag.in_degree(n) for n in dag.nodes()}
     q=deque([n for n,d in indeg.items() if d==0])
-    AEST={n:0.0 for n in q}
-    topo=[]
+    AEST={n:0.0 for n in q}; topo=[]
     while q:
         n=q.popleft(); topo.append(n)
         for s in dag.successors(n):
             est=AEST[n] + avg_w.get(n,0.0) + avg_c[(n,s)]
-            if s not in AEST or est > AEST[s]: AEST[s]=est
+            if s not in AEST or est > AEST[s]:
+                AEST[s]=est
             indeg[s]-=1
-            if indeg[s]==0: q.append(s)
-    # ALST backward
+            if indeg[s]==0:
+                q.append(s)
+    # Backward ALST using global makespan for exits
     rev=topo[::-1]
     exit_nodes=[n for n in dag.nodes() if dag.out_degree(n)==0]
-    ALST={e:AEST.get(e,0.0) for e in exit_nodes}
+    T=max((AEST.get(e,0.0) + avg_w.get(e,0.0) for e in exit_nodes), default=0.0)
+    ALST={e: T - avg_w.get(e,0.0) for e in exit_nodes}
     for n in rev:
         if n in exit_nodes: continue
         succs=list(dag.successors(n))
-        candidate=[ALST[s] - avg_c[(n,s)] for s in succs if s in ALST]
-        if candidate:
-            ALST[n] = min(candidate) - avg_w.get(n,0.0)
+        cand=[ALST[s] - avg_c[(n,s)] for s in succs if s in ALST]
+        if cand:
+            ALST[n] = min(cand) - avg_w.get(n,0.0)
     return AEST, ALST, avg_w, avg_c
 
 def _identify_cn_cnp(dag:nx.DiGraph, AEST:Dict[int,float], ALST:Dict[int,float], tol:float=1e-7):
@@ -190,14 +196,29 @@ def _rank_pct(PCT:Dict[int,List[float]], comp:np.ndarray):
     return ranks
 
 def _insertion_eft(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent], proc_sched:Dict[int,List[ScheduleEvent]]):
+    """HEFT-style gap insertion with defensive zero-bandwidth handling.
+    If any required inter-processor edge has bw<=0, returns an infinite-time event (ignored by selection)."""
+    # Detect infeasible comm early
+    for pred in dag.predecessors(task):
+        sj=task_sched[pred]
+        if sj.proc != proc:
+            data=float(dag[pred][task]['weight'])
+            if data>0 and comm[sj.proc, proc] <= 0:
+                return ScheduleEvent(task, float('inf'), float('inf'), proc)
     ready=0.0
     for pred in dag.predecessors(task):
         sj=task_sched[pred]
-        if sj.proc==proc: arr=sj.end
+        if sj.proc==proc:
+            arr=sj.end
         else:
-            bw=comm[sj.proc, proc]
-            comm_t=(float(dag[pred][task]['weight'])/bw) if bw>0 else 0.0
-            arr=sj.end+comm_t
+            data=float(dag[pred][task]['weight'])
+            if data==0:
+                arr=sj.end
+            else:
+                bw=comm[sj.proc, proc]
+                if bw<=0:
+                    return ScheduleEvent(task, float('inf'), float('inf'), proc)
+                arr=sj.end + data / bw
         if arr>ready: ready=arr
     dur=float(comp[task,proc])
     jobs=proc_sched[proc]
@@ -212,12 +233,18 @@ def _insertion_eft(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.
                 cand=ScheduleEvent(task, gap_start, gap_start+dur, proc)
                 if cand.end<best.end: best=cand
         if i==len(jobs)-1:
-            start=max(ready,j.end); cand=ScheduleEvent(task,start,start+dur,proc)
+            start=max(ready,j.end)
+            cand=ScheduleEvent(task,start,start+dur,proc)
             if cand.end<best.end: best=cand
     return best
 
 def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=None, **kwargs):
-    if proc_schedules is None: proc_schedules={p:[] for p in range(communication_matrix.shape[0])}
+    # Shape & consistency checks
+    P=communication_matrix.shape[0]
+    assert communication_matrix.shape==(P,P), "communication_matrix must be square PxP"
+    assert computation_matrix.shape[1]==P, "computation_matrix column count must match #processors"
+    assert computation_matrix.shape[0]==dag.number_of_nodes(), "computation_matrix rows must equal number of DAG nodes"
+    if proc_schedules is None: proc_schedules={p:[] for p in range(P)}
     # Precompute AEST/ALST and comm times
     AEST, ALST, avg_w_map, avg_c = _compute_AEST_ALST(dag, computation_matrix, communication_matrix)
     # Identify CN / CNP sets
@@ -234,8 +261,8 @@ def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=N
     for p in range(communication_matrix.shape[0]):
         proc_schedules.setdefault(p,[])
     while ready:
-        # Highest rank ready task
-        t=max(ready, key=lambda n: ranks.get(n,0.0))
+        # Highest rank with deterministic tie-break (rank, out_degree, -task_id)
+        t=max(ready, key=lambda n: (ranks.get(n,0.0), dag.out_degree(n), -n))
         is_cnp=CNP.get(t, False)
         best=None; best_score=None
         for p in range(communication_matrix.shape[0]):
