@@ -25,17 +25,28 @@ def readCsvToDict(csv_file: str):
     return {i:row for i,row in enumerate(m)}
 
 def readDagMatrix(dag_file: str, show_dag: bool=False):
+    """Read adjacency matrix CSV and build DAG excluding zero-weight (absent) edges.
+
+    Prevents creation of spurious zero-weight edges that could introduce cycles on
+    dense zero blocks when using networkx.DiGraph(matrix) directly.
+    """
     m=readCsvToNumpyMatrix(dag_file)
-    dag=nx.DiGraph(m)
-    # Edge weights already floats; zero-weight edges remain (represent no comm / removable if desired)
+    G=nx.DiGraph()
+    n=m.shape[0]
+    G.add_nodes_from(range(n))
+    for i in range(n):
+        for j in range(n):
+            w=float(m[i,j])
+            if w>0.0:
+                G.add_edge(i,j,weight=w)
     if show_dag:
         try:
-            pos=nx.nx_pydot.graphviz_layout(dag, prog='dot')
+            pos=nx.nx_pydot.graphviz_layout(G, prog='dot')
         except Exception:
-            pos=nx.spring_layout(dag, seed=42)
-        nx.draw(dag, pos=pos, with_labels=True)
+            pos=nx.spring_layout(G, seed=42)
+        nx.draw(G, pos=pos, with_labels=True)
         plt.show()
-    return dag
+    return G
 
 def _avg_exec(comp:np.ndarray, t:int)->float:
     return float(np.mean(comp[t])) if t < comp.shape[0] else 0.0
@@ -77,7 +88,6 @@ def _compute_AEST_ALST(dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray):
     # ALST backward
     rev=topo[::-1]
     exit_nodes=[n for n in dag.nodes() if dag.out_degree(n)==0]
-    max_exit=max(AEST.get(e,0.0) + avg_w.get(e,0.0) for e in exit_nodes) if exit_nodes else 0.0
     ALST={e:AEST.get(e,0.0) for e in exit_nodes}
     for n in rev:
         if n in exit_nodes: continue
