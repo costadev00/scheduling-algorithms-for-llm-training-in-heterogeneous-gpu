@@ -1,4 +1,4 @@
-"""Paper-based IPEFT implementation.
+"""Paper-based IPEFT implementation (configurable).
 
 Key features vs PEFT:
     * Dual tables: PCT (pessimistic) + CNCT (critical-node constrained) instead of single OCT.
@@ -70,10 +70,13 @@ def _compute_AEST_ALST(dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray):
     Critical fix: For multiple exits, ALST for exits must be derived from global makespan T so
     that only true critical nodes satisfy AEST==ALST, preventing all exits being misclassified as CN.
     """
-    # Average time per unit data: mean of reciprocals
+    # Average time per unit data fixed to reciprocal of mean bandwidth (canonical HEFT-style).
     mask=np.ones_like(comm, dtype=bool); np.fill_diagonal(mask, False)
     bw=comm[mask]; bw=bw[bw>0]
-    avg_time=float(np.mean(1.0/bw)) if len(bw) else 1.0
+    if len(bw)==0:
+        avg_time=1.0
+    else:
+        avg_time=1.0/float(np.mean(bw))
     avg_w={t: float(np.mean(comp[t])) if t < comp.shape[0] else 0.0 for t in dag.nodes()}
     avg_c={(u,v): float(dag[u][v]['weight']) * avg_time for u,v in dag.edges()}
     # Forward AEST (longest with avg costs)
@@ -188,11 +191,14 @@ def _compute_CNCT(dag:nx.DiGraph, comp:np.ndarray, avg_c:Dict[Tuple[int,int],flo
             if p not in CNCT and p not in pending: pending.append(p)
     return CNCT
 
-def _rank_pct(PCT:Dict[int,List[float]], comp:np.ndarray):
+def _rank_pct(PCT:Dict[int,List[float]], comp:np.ndarray, include_avg_exec:bool):
+    """Rank = mean(PCT[t,*]) (+ avg_exec if include_avg_exec)."""
     ranks={}
     for t,row in PCT.items():
-        avg_w = float(np.mean(comp[t])) if t < comp.shape[0] else 0.0
-        ranks[t] = float(np.mean(row)) + avg_w
+        base=float(np.mean(row))
+        if include_avg_exec and t < comp.shape[0]:
+            base += float(np.mean(comp[t]))
+        ranks[t]=base
     return ranks
 
 def _insertion_eft(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.ndarray, task_sched:Dict[int,ScheduleEvent], proc_sched:Dict[int,List[ScheduleEvent]]):
@@ -238,7 +244,18 @@ def _insertion_eft(task:int, proc:int, dag:nx.DiGraph, comp:np.ndarray, comm:np.
             if cand.end<best.end: best=cand
     return best
 
-def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=None, **kwargs):
+def schedule_dag(
+    dag,
+    computation_matrix,
+    communication_matrix,
+    proc_schedules=None,
+    *,
+    rank_include_avg_exec:bool=False,
+    # By default critical nodes are NOT exempt from CNCT penalty (official behavior)
+    exempt_cn:bool=False,
+    # comm_avg_mode removed (fixed heuristic)
+    **kwargs
+):
     # Shape & consistency checks
     P=communication_matrix.shape[0]
     assert communication_matrix.shape==(P,P), "communication_matrix must be square PxP"
@@ -252,7 +269,7 @@ def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=N
     # Build cost tables using average communication time (zero when same processor)
     PCT=_compute_PCT(dag.copy(), computation_matrix, avg_c)
     CNCT=_compute_CNCT(dag.copy(), computation_matrix, avg_c, crit_succ)
-    ranks=_rank_pct(PCT, computation_matrix)
+    ranks=_rank_pct(PCT, computation_matrix, include_avg_exec=rank_include_avg_exec)
     tasks=[n for n in dag.nodes() if n < computation_matrix.shape[0]]
     unscheduled=set(tasks)
     in_deg={t:dag.in_degree(t) for t in tasks}
@@ -264,11 +281,14 @@ def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=N
         # Highest rank with deterministic tie-break (rank, out_degree, -task_id)
         t=max(ready, key=lambda n: (ranks.get(n,0.0), dag.out_degree(n), -n))
         is_cnp=CNP.get(t, False)
+        is_cn = t in CN
         best=None; best_score=None
         for p in range(communication_matrix.shape[0]):
             eft_event=_insertion_eft(t,p,dag,computation_matrix,communication_matrix,task_sched,proc_schedules)
             eft=eft_event.end
-            score = eft if is_cnp else eft + CNCT.get(t,[0.0]*communication_matrix.shape[1])[p]
+            apply_penalty = not (is_cnp or (exempt_cn and is_cn))
+            penalty = 0.0 if not apply_penalty else CNCT.get(t,[0.0]*communication_matrix.shape[1])[p]
+            score = eft + penalty
             if best is None or score < best_score or (score==best_score and eft < best.end) or (score==best_score and eft==best.end and p < best.proc):
                 best=eft_event; best_score=score
         task_sched[t]=best  # type: ignore
@@ -281,7 +301,8 @@ def schedule_dag(dag, computation_matrix, communication_matrix, proc_schedules=N
                 if in_deg[s]==0: ready.add(s)
     if unscheduled:
         raise RuntimeError('Cycle or unreachable tasks in DAG (unscheduled remaining).')
-    return proc_schedules, task_sched, {"PCT":PCT, "CNCT":CNCT, "AEST":AEST, "ALST":ALST, "crit_succ":crit_succ, "CN":CN, "CNP":CNP}
+    return proc_schedules, task_sched, {"PCT":PCT, "CNCT":CNCT, "AEST":AEST, "ALST":ALST, "crit_succ":crit_succ, "CN":CN, "CNP":CNP,
+                                        "config": {"rank_include_avg_exec":rank_include_avg_exec, "exempt_cn":exempt_cn}}
 
 def _compute_makespan_and_idle(proc_schedules):
     makespan=max((ev.end for jobs in proc_schedules.values() for ev in jobs), default=0.0)

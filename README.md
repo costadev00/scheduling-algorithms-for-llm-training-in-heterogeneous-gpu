@@ -132,11 +132,13 @@ IPEFT (Improved PEFT):
 5. Build Critical-Node Cost Table (CNCT): Similar recursion but considers only critical successors and takes for each critical successor the best continuation processor: CNCT[i,p] = exec(i,p) + max_{crit succ j} ( min_{q} ( comm(i,j,p,q) + CNCT[j,q] ) ). If no critical successors, CNCT[i,p] = exec(i,p).
 6. Rank (rankPCT) of task i = mean_p PCT[i,p] + mean execution time of i (adds intrinsic weight; mirrors provided specification).
 7. Order tasks by decreasing rankPCT (list scheduling order).
-8. For each ready task, evaluate insertion-based Earliest Finish Time (EFT) on every processor. Compute EFTCNCT score = EFT + mean_{p}( CNCT[i,p] ) - CNCT[i,processor] (implementation variant equivalent to including continuation bias) OR directly EFT + CNCT[i,processor] (selected form per provided specification). Current implementation uses EFT + CNCT[i,p] and chooses the processor minimizing this blended cost; ties broken by earlier EFT then lower processor id.
+8. For each ready task, evaluate insertion-based Earliest Finish Time (EFT) on every processor. Processor score = EFT + CNCT[i,p]. Ties broken by earlier EFT then lower processor id.
 9. Insert task at earliest legal start (respecting precedence & existing reservations) as in HEFT/PEFT.
 10. Proceed until all tasks scheduled; metrics reported identically.
 
-Differences vs PEFT: PEFT relies on a single optimistic (best-continuation) OCT table and ranks via its row mean; IPEFT introduces dual pessimistic (PCT) and critical-focused (CNCT) tables plus critical-successor filtering via AEST/ALST slack, aiming to improve discrimination on true critical path tasks while still guarding against worst-case branching.
+Differences vs PEFT: PEFT relies on a single optimistic (best-continuation) OCT table and ranks via its row mean; IPEFT introduces dual pessimistic (PCT) and critical-focused (CNCT) tables plus critical-successor filtering via AEST/ALST slack, aiming to improve discrimination on true critical path tasks while still guarding against worst-case branching. Official default: critical nodes ARE penalized (i.e. not exempt) so their processor choice still considers CNCT continuation impact. A flag (`--ipeft_exempt_cn`) can be used to revert to the earlier experimental behavior that exempted CN from penalty.
+
+Config toggles: `--ipeft_rank_include_avg_exec` (adds avg exec time into rank) and `--ipeft_exempt_cn` (do not penalize CN). Communication averaging mode is fixed (reciprocal of mean bandwidth) and no longer configurable.
 
 Empirical note (included example runs in this repo): On a dense 120-task synthetic graph IPEFT produced a slightly higher makespan than PEFT in one seed (reflecting heuristic variability) but reduced load imbalance. Behavior will vary with communication heterogeneity; further tuning of slack threshold or CNCT blending may improve results.
 
