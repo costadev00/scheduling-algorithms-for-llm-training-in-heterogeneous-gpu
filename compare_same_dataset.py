@@ -9,6 +9,7 @@ Inputs:
 
 Output: One JSON line per algorithm with metrics: makespan, load_balance_ratio,
 communication_cost, waiting_time, energy_cost (if power provided).
+If a power matrix is supplied, an Energy subplot is automatically added to the metrics figure.
 """
 from __future__ import annotations
 import argparse, math, json
@@ -160,22 +161,39 @@ def _save_dag_image(dag:nx.DiGraph, path:Path):
     plt.close()
 
 def _save_gantt(proc_sched:dict, path:Path, title:str):
+    """Save a Gantt chart with one clearly separated horizontal lane per processor.
+
+    Ensures y-axis shows every processor index (0..P-1) even if some have no tasks.
+    Bars centered in their lane; consistent lane height.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    plt.figure(figsize=(12, 0.6*max(1,len(proc_sched))+1))
+    procs = sorted(proc_sched.keys())
+    if not procs:
+        return
+    P = max(procs)+1  # assume processors labeled 0..P-1
+    lane_height = 0.8
+    fig_height = 0.35 * P + 1.5  # scale height with processor count
+    plt.figure(figsize=(14, fig_height))
     colors={}
     import random
     random.seed(42)
-    for p, jobs in sorted(proc_sched.items()):
+    for p in range(P):
+        jobs = proc_sched.get(p, [])
         for ev in jobs:
             if ev.task not in colors:
                 colors[ev.task] = (random.random(), random.random(), random.random())
-            plt.barh(y=p, width=ev.end-ev.start, left=ev.start, height=0.6, color=colors[ev.task])
-            plt.text(ev.start + (ev.end-ev.start)/2, p, str(ev.task), va='center', ha='center', fontsize=7, color='white')
+            plt.barh(y=p, width=ev.end-ev.start, left=ev.start, height=lane_height, color=colors[ev.task], edgecolor='black', linewidth=0.2)
+            # Only annotate if bar wide enough
+            if (ev.end-ev.start) > 0.02 * max(ev.end for js in proc_sched.values() for ev in js):
+                plt.text(ev.start + (ev.end-ev.start)/2, p, str(ev.task), va='center', ha='center', fontsize=6, color='white')
+    plt.yticks(range(P), [str(i) for i in range(P)])
+    plt.ylim(-0.5, P-0.5)
+    plt.grid(axis='y', linestyle=':', linewidth=0.5, alpha=0.6)
     plt.ylabel('Processor')
     plt.xlabel('Time')
     plt.title(title)
     plt.tight_layout()
-    plt.savefig(path, dpi=150)
+    plt.savefig(path, dpi=180)
     plt.close()
 
 def _plot_metrics(results:list[dict], path:Path):
@@ -188,7 +206,11 @@ def _plot_metrics(results:list[dict], path:Path):
     makespans=[r['makespan'] for r in ordered]
     load_bal=[r['load_balance_ratio'] for r in ordered]
     waits=[r['waiting_time'] for r in ordered]
-    fig,ax=plt.subplots(3,1,figsize=(10,9))
+    # Determine if energy is present
+    energy_vals=[r['energy_cost'] for r in ordered if r.get('energy_cost') is not None]
+    include_energy = any(ev is not None and ev>0 for ev in energy_vals)
+    rows = 4 if include_energy else 3
+    fig,ax=plt.subplots(rows,1,figsize=(10, 3*rows))
 
     def _plot_single(a, vals, title, color, ylabel, fmt="{v:.2f}"):
         bars=a.bar(names, vals, color=color)
@@ -215,6 +237,10 @@ def _plot_metrics(results:list[dict], path:Path):
     _plot_single(ax[0], makespans, 'Makespan', '#4C72B0', 'Makespan', fmt="{v:.3f}")
     _plot_single(ax[1], load_bal, 'Load Balancing (Ratio)', '#DD8452', 'Load Balance', fmt="{v:.4f}")
     _plot_single(ax[2], waits, 'Waiting Time', '#55A868', 'Waiting Time', fmt="{v:.3f}")
+    if include_energy:
+        # Replace None with 0 for plotting clarity
+        energy_clean=[(e if e is not None else 0.0) for e in energy_vals]
+        _plot_single(ax[3], energy_clean, 'Energy Cost', '#937860', 'Energy (J)', fmt="{v:.2f}")
     plt.tight_layout()
     plt.savefig(path, dpi=150)
     plt.close(fig)
@@ -267,7 +293,4 @@ def main():
         _plot_metrics(results, out_dir / 'metrics.png')
 
 if __name__=='__main__':
-    main()
-
-if __name__ == '__main__':
     main()
