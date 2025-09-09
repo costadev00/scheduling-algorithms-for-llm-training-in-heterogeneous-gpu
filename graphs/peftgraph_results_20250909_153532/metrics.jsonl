@@ -1,6 +1,0 @@
-﻿{"algorithm": "DLS", "makespan": 134.0, "load_balance_ratio": 0.47512437810945274, "communication_cost": 134.0, "waiting_time": 53.8, "energy_cost": 435.69999999999993}
-{"algorithm": "HEFT", "makespan": 89.0, "load_balance_ratio": 0.7677902621722846, "communication_cost": 0.0, "waiting_time": 31.3, "energy_cost": 465.49999999999994}
-{"algorithm": "HEFT-LA", "makespan": 89.0, "load_balance_ratio": 0.7677902621722846, "communication_cost": 0.0, "waiting_time": 31.3, "energy_cost": 465.49999999999994}
-{"algorithm": "PEFT", "makespan": 93.0, "load_balance_ratio": 0.7060931899641577, "communication_cost": 37.0, "waiting_time": 34.6, "energy_cost": 503.9}
-{"algorithm": "IHEFT", "makespan": 136.0, "load_balance_ratio": 0.45588235294117646, "communication_cost": 134.0, "waiting_time": 47.2, "energy_cost": 436.7999999999999}
-{"algorithm": "IPEFT", "makespan": 93.0, "load_balance_ratio": 0.7060931899641577, "communication_cost": 37.0, "waiting_time": 34.6, "energy_cost": 503.9}

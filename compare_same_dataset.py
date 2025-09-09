@@ -130,9 +130,12 @@ def run_algo(spec:AlgoSpec, dag_file:str, exec_file:str, bw_file:str, power_file
     proc_sched, _, _ = spec.schedule(dag, computation_matrix=comp, communication_matrix=bw)
     mk,_,_ = spec.mk_idle(proc_sched)
     busy,_,_,_ = spec.load(proc_sched)
-    # New definition: average processor busy time divided by makespan (utilization-like)
+    # Average busy time per processor. Redefine load balance per user request:
+    #   lb_ratio = makespan / avg_busy
+    # An ideal schedule keeps every processor busy for the full makespan,
+    # giving lb_ratio == 1. Values >1 indicate imbalance (idle gaps).
     avg_busy = (sum(busy.values())/len(busy)) if busy else 0.0
-    lb_ratio = (avg_busy/mk) if mk>0 else 0.0
+    lb_ratio = (mk/avg_busy) if avg_busy>0 else 0.0
     comm_cost = spec.comm(dag, proc_sched, bw)
     wait_t = spec.wait(proc_sched)
     energy = 0.0
@@ -214,52 +217,59 @@ def _plot_metrics(results:list[dict], path:Path):
     fig,ax=plt.subplots(rows,1,figsize=(10, 3*rows), constrained_layout=True)
 
     def _plot_single(a, vals, title, color, ylabel, fmt="{v:.2f}", prefer="min"):
-        bars=a.bar(names, vals, color=color, edgecolor='black', linewidth=0.4)
+        bars=a.bar(names, vals, color=color, edgecolor='black', linewidth=0.4, zorder=2)
         a.set_ylabel(ylabel)
         a.set_title(title)
         a.tick_params(axis='x', rotation=25)
         vmin=min(vals); vmax=max(vals); vr=vmax-vmin
-        # Determine dynamic margins
+        # Margin so labels placed above bars are always visible
         if vr == 0:
-            margin = (vmax*0.12) if vmax!=0 else 1.0
+            label_gap = (abs(vmax) * 0.1) if vmax != 0 else 1.0
         else:
-            margin = vr * 0.15
-        lower = min(0, vmin - margin*0.2)
-        upper = vmax + margin
+            label_gap = vr * 0.12
+        lower = min(0, vmin - vr*0.05)
+        upper = vmax + label_gap * 2.2
         a.set_ylim(lower, upper)
-        headroom = upper - lower
-        outside_offset = headroom * 0.012
-        inside_offset = headroom * 0.02
+        grid_alpha = 0.25
+        a.yaxis.grid(True, linestyle=':', linewidth=0.6, alpha=grid_alpha, zorder=0)
 
         def place_text(bar, text):
             bh = bar.get_height()
-            candidate = bh + outside_offset
-            top_limit = upper - headroom*0.015
-            # If label would exceed top or bar nearly touches top, place inside
-            if candidate > top_limit or (upper - bh) < headroom*0.07:
-                y = bh - inside_offset
-                va='top'
-            else:
-                y = candidate
-                va='bottom'
-            a.text(bar.get_x()+bar.get_width()/2, y, text, ha='center', va=va, fontsize=8, clip_on=True)
+            y = bh + label_gap * 0.6
+            # Ensure stays within axis
+            if y > upper - label_gap * 0.4:
+                # Expand ylim slightly if needed
+                a.set_ylim(lower, y + label_gap)
+                # Recompute upper for subsequent bars
+            a.text(bar.get_x()+bar.get_width()/2, y, text, ha='center', va='bottom', fontsize=8,
+                   bbox=dict(boxstyle='round,pad=0.22', fc='white', ec='none', alpha=0.8))
 
         if prefer == 'min':
             best_val = vmin
             for bar,val in zip(bars, vals):
                 pct = (val-best_val)/best_val*100 if best_val!=0 else 0.0
-                label = "(best)" if val==best_val else f"(+{pct:.2f}%)"
+                label = "(best)" if val==best_val else f"+{pct:.2f}%"
                 place_text(bar, f"{fmt.format(v=val)}\n{label}")
-        else:  # prefer max
+        elif prefer == 'max':
             best_val = vmax
             for bar,val in zip(bars, vals):
                 pct = (best_val - val)/best_val*100 if best_val!=0 else 0.0
-                label = "(best)" if val==best_val else f"(+{pct:.2f}% worse)"
+                label = "(best)" if val==best_val else f"+{pct:.2f}% worse"
                 place_text(bar, f"{fmt.format(v=val)}\n{label}")
+        elif prefer == 'close1':
+            deviations=[abs(v-1) for v in vals]
+            best_dev=min(deviations)
+            for bar,val,dev in zip(bars, vals, deviations):
+                pct = dev*100
+                label = "(best)" if dev==best_dev else f"dev {pct:.2f}%"
+                place_text(bar, f"{fmt.format(v=val)}\n{label}")
+        else:
+            for bar,val in zip(bars, vals):
+                place_text(bar, f"{fmt.format(v=val)}")
 
     _plot_single(ax[0], makespans, 'Makespan', '#4C72B0', 'Makespan', fmt="{v:.3f}", prefer='min')
-    # For load balance (utilization), higher is better
-    _plot_single(ax[1], load_bal, 'Load Balance (Avg Busy / Makespan)', '#DD8452', 'Load Balance', fmt="{v:.4f}", prefer='max')
+    # Load balance ratio: Makespan / Avg Busy (>=1, closer to 1 is better)
+    _plot_single(ax[1], load_bal, 'Load Balance (Makespan / Avg Busy) – closer to 1 is better', '#DD8452', 'LB Ratio', fmt="{v:.3f}", prefer='close1')
     _plot_single(ax[2], waits, 'Waiting Time', '#55A868', 'Waiting Time', fmt="{v:.3f}")
     if include_energy:
         # Replace None with 0 for plotting clarity
