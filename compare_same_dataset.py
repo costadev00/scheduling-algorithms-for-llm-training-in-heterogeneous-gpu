@@ -240,10 +240,6 @@ def _plot_metrics(results:list[dict], path:Path):
         def place_text(bar, text):
             bh = bar.get_height()
             y = bh + text_offset
-            if y > upper:
-                a.set_ylim(lower, y + span * 0.1)
-                y = bh + text_offset
-            a.text(
                 bar.get_x() + bar.get_width() / 2,
                 y,
                 text,
