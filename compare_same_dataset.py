@@ -240,7 +240,6 @@ def _plot_metrics(results:list[dict], path:Path):
         def place_text(bar, text):
             bh = bar.get_height()
             y = bh + text_offset
-            txt = a.text(
                 bar.get_x() + bar.get_width() / 2,
                 y,
                 text,
@@ -249,13 +248,6 @@ def _plot_metrics(results:list[dict], path:Path):
                 fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.22", fc="white", ec="none", alpha=0.8),
             )
-            # ensure full annotation (including bbox) fits inside axes
-            fig.canvas.draw()
-            bbox = txt.get_window_extent(renderer=fig.canvas.get_renderer())
-            bbox_data = bbox.transformed(a.transData.inverted())
-            top = bbox_data.y1
-            if top > a.get_ylim()[1]:
-                a.set_ylim(a.get_ylim()[0], top + span * 0.05)
 
         if prefer == "min":
             best_val = vmin
