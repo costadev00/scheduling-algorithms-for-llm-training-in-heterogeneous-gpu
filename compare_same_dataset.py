@@ -214,67 +214,84 @@ def _plot_metrics(results:list[dict], path:Path):
     energy_vals=[r['energy_cost'] for r in ordered if r.get('energy_cost') is not None]
     include_energy = any(ev is not None and ev>0 for ev in energy_vals)
     rows = 4 if include_energy else 3
-    fig,ax=plt.subplots(rows,1,figsize=(10, 3*rows), constrained_layout=True)
+    fig, ax = plt.subplots(rows, 1, figsize=(10, 3 * rows), constrained_layout=True)
 
     def _plot_single(a, vals, title, color, ylabel, fmt="{v:.2f}", prefer="min"):
-        bars=a.bar(names, vals, color=color, edgecolor='black', linewidth=0.4, zorder=2)
+        bars = a.bar(names, vals, color=color, edgecolor="black", linewidth=0.4, zorder=2)
         a.set_ylabel(ylabel)
         a.set_title(title)
-        a.tick_params(axis='x', rotation=25)
-        vmin=min(vals); vmax=max(vals); vr=vmax-vmin
-        # Margin so labels placed above bars are always visible
-        if vr == 0:
-            label_gap = (abs(vmax) * 0.1) if vmax != 0 else 1.0
-        else:
-            label_gap = vr * 0.12
-        lower = min(0, vmin - vr*0.05)
-        upper = vmax + label_gap * 2.2
+        a.tick_params(axis="x", rotation=25)
+
+        vmin, vmax = min(vals), max(vals)
+        span = vmax - vmin
+        if span == 0:
+            span = abs(vmax) if vmax != 0 else 1.0
+
+        # generous margins so labels sit comfortably inside the axes
+        lower = min(0, vmin - span * 0.1)
+        upper = vmax + span * 0.30
         a.set_ylim(lower, upper)
+
         grid_alpha = 0.25
-        a.yaxis.grid(True, linestyle=':', linewidth=0.6, alpha=grid_alpha, zorder=0)
+        a.yaxis.grid(True, linestyle=":", linewidth=0.6, alpha=grid_alpha, zorder=0)
+
+        text_offset = span * 0.05
 
         def place_text(bar, text):
             bh = bar.get_height()
-            y = bh + label_gap * 0.6
-            # Ensure stays within axis
-            if y > upper - label_gap * 0.4:
-                # Expand ylim slightly if needed
-                a.set_ylim(lower, y + label_gap)
-                # Recompute upper for subsequent bars
-            a.text(bar.get_x()+bar.get_width()/2, y, text, ha='center', va='bottom', fontsize=8,
-                   bbox=dict(boxstyle='round,pad=0.22', fc='white', ec='none', alpha=0.8))
+            y = bh + text_offset
+            if y > upper:
+                a.set_ylim(lower, y + span * 0.1)
+                y = bh + text_offset
+            a.text(
+                bar.get_x() + bar.get_width() / 2,
+                y,
+                text,
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.22", fc="white", ec="none", alpha=0.8),
+            )
 
-        if prefer == 'min':
+        if prefer == "min":
             best_val = vmin
-            for bar,val in zip(bars, vals):
-                pct = (val-best_val)/best_val*100 if best_val!=0 else 0.0
-                label = "(best)" if val==best_val else f"+{pct:.2f}%"
+            for bar, val in zip(bars, vals):
+                pct = (val - best_val) / best_val * 100 if best_val != 0 else 0.0
+                label = "(best)" if val == best_val else f"+{pct:.2f}%"
                 place_text(bar, f"{fmt.format(v=val)}\n{label}")
-        elif prefer == 'max':
+        elif prefer == "max":
             best_val = vmax
-            for bar,val in zip(bars, vals):
-                pct = (best_val - val)/best_val*100 if best_val!=0 else 0.0
-                label = "(best)" if val==best_val else f"+{pct:.2f}% worse"
+            for bar, val in zip(bars, vals):
+                pct = (best_val - val) / best_val * 100 if best_val != 0 else 0.0
+                label = "(best)" if val == best_val else f"+{pct:.2f}% worse"
                 place_text(bar, f"{fmt.format(v=val)}\n{label}")
-        elif prefer == 'close1':
-            deviations=[abs(v-1) for v in vals]
-            best_dev=min(deviations)
-            for bar,val,dev in zip(bars, vals, deviations):
-                pct = dev*100
-                label = "(best)" if dev==best_dev else f"dev {pct:.2f}%"
+        elif prefer == "close1":
+            deviations = [abs(v - 1) for v in vals]
+            best_dev = min(deviations)
+            for bar, val, dev in zip(bars, vals, deviations):
+                pct = dev * 100
+                label = "(best)" if dev == best_dev else f"dev {pct:.2f}%"
                 place_text(bar, f"{fmt.format(v=val)}\n{label}")
         else:
-            for bar,val in zip(bars, vals):
+            for bar, val in zip(bars, vals):
                 place_text(bar, f"{fmt.format(v=val)}")
 
-    _plot_single(ax[0], makespans, 'Makespan', '#4C72B0', 'Makespan', fmt="{v:.3f}", prefer='min')
+    _plot_single(ax[0], makespans, "Makespan", "#4C72B0", "Makespan", fmt="{v:.3f}", prefer="min")
     # Load balance ratio: Makespan / Avg Busy (>=1, closer to 1 is better)
-    _plot_single(ax[1], load_bal, 'Load Balance (Makespan / Avg Busy) – closer to 1 is better', '#DD8452', 'LB Ratio', fmt="{v:.3f}", prefer='close1')
-    _plot_single(ax[2], waits, 'Waiting Time', '#55A868', 'Waiting Time', fmt="{v:.3f}")
+    _plot_single(
+        ax[1],
+        load_bal,
+        "Load Balance (Makespan / Avg Busy) – closer to 1 is better",
+        "#DD8452",
+        "LB Ratio",
+        fmt="{v:.3f}",
+        prefer="close1",
+    )
+    _plot_single(ax[2], waits, "Waiting Time", "#55A868", "Waiting Time", fmt="{v:.3f}")
     if include_energy:
         # Replace None with 0 for plotting clarity
-        energy_clean=[(e if e is not None else 0.0) for e in energy_vals]
-        _plot_single(ax[3], energy_clean, 'Energy Cost', '#937860', 'Energy (J)', fmt="{v:.2f}")
+        energy_clean = [(e if e is not None else 0.0) for e in energy_vals]
+        _plot_single(ax[3], energy_clean, "Energy Cost", "#937860", "Energy (J)", fmt="{v:.2f}")
     plt.tight_layout()
     plt.savefig(path, dpi=150)
     plt.close(fig)
