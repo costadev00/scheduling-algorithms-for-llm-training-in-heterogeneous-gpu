@@ -214,7 +214,7 @@ def _plot_metrics(results:list[dict], path:Path):
     energy_vals=[r['energy_cost'] for r in ordered if r.get('energy_cost') is not None]
     include_energy = any(ev is not None and ev>0 for ev in energy_vals)
     rows = 4 if include_energy else 3
-    fig, ax = plt.subplots(rows, 1, figsize=(10, 3 * rows), constrained_layout=True)
+    fig, ax = plt.subplots(rows, 1, figsize=(10, 3 * rows))
 
     def _plot_single(a, vals, title, color, ylabel, fmt="{v:.2f}", prefer="min"):
         bars = a.bar(names, vals, color=color, edgecolor="black", linewidth=0.4, zorder=2)
@@ -237,9 +237,11 @@ def _plot_metrics(results:list[dict], path:Path):
 
         text_offset = span * 0.05
 
-        def place_text(bar, text):
+        def place_text(bar, text, i):
             bh = bar.get_height()
-            y = bh + text_offset
+            stagger_offset = (i % 2) * span * 0.15
+            y = bh + text_offset + stagger_offset
+            txt = a.text(
                 bar.get_x() + bar.get_width() / 2,
                 y,
                 text,
@@ -248,29 +250,36 @@ def _plot_metrics(results:list[dict], path:Path):
                 fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.22", fc="white", ec="none", alpha=0.8),
             )
+            # ensure full annotation (including bbox) fits inside axes
+            fig.canvas.draw()
+            bbox = txt.get_window_extent(renderer=fig.canvas.get_renderer())
+            bbox_data = bbox.transformed(a.transData.inverted())
+            top = bbox_data.y1
+            if top > a.get_ylim()[1]:
+                a.set_ylim(a.get_ylim()[0], top + span * 0.05)
 
         if prefer == "min":
             best_val = vmin
-            for bar, val in zip(bars, vals):
+            for i, (bar, val) in enumerate(zip(bars, vals)):
                 pct = (val - best_val) / best_val * 100 if best_val != 0 else 0.0
                 label = "(best)" if val == best_val else f"+{pct:.2f}%"
-                place_text(bar, f"{fmt.format(v=val)}\n{label}")
+                place_text(bar, f"{fmt.format(v=val)}\n{label}", i)
         elif prefer == "max":
             best_val = vmax
-            for bar, val in zip(bars, vals):
+            for i, (bar, val) in enumerate(zip(bars, vals)):
                 pct = (best_val - val) / best_val * 100 if best_val != 0 else 0.0
                 label = "(best)" if val == best_val else f"+{pct:.2f}% worse"
-                place_text(bar, f"{fmt.format(v=val)}\n{label}")
+                place_text(bar, f"{fmt.format(v=val)}\n{label}", i)
         elif prefer == "close1":
             deviations = [abs(v - 1) for v in vals]
             best_dev = min(deviations)
-            for bar, val, dev in zip(bars, vals, deviations):
+            for i, (bar, val, dev) in enumerate(zip(bars, vals, deviations)):
                 pct = dev * 100
                 label = "(best)" if dev == best_dev else f"dev {pct:.2f}%"
-                place_text(bar, f"{fmt.format(v=val)}\n{label}")
+                place_text(bar, f"{fmt.format(v=val)}\n{label}", i)
         else:
-            for bar, val in zip(bars, vals):
-                place_text(bar, f"{fmt.format(v=val)}")
+            for i, (bar, val) in enumerate(zip(bars, vals)):
+                place_text(bar, f"{fmt.format(v=val)}", i)
 
     _plot_single(ax[0], makespans, "Makespan", "#4C72B0", "Makespan", fmt="{v:.3f}", prefer="min")
     # Load balance ratio: Makespan / Avg Busy (>=1, closer to 1 is better)
@@ -283,12 +292,13 @@ def _plot_metrics(results:list[dict], path:Path):
         fmt="{v:.3f}",
         prefer="close1",
     )
-    _plot_single(ax[2], waits, "Waiting Time", "#55A868", "Waiting Time", fmt="{v:.3f}")
+    _plot_single(ax[2], waits, "Waiting Time", "#55A868", "Waiting Time", fmt="{v:.3f}", prefer="min")
     if include_energy:
         # Replace None with 0 for plotting clarity
         energy_clean = [(e if e is not None else 0.0) for e in energy_vals]
-        _plot_single(ax[3], energy_clean, "Energy Cost", "#937860", "Energy (J)", fmt="{v:.2f}")
-    plt.tight_layout()
+        _plot_single(ax[3], energy_clean, "Energy Cost", "#937860", "Energy (J)", fmt="{v:.2f}", prefer="min")
+    
+    plt.tight_layout(h_pad=3.0)
     plt.savefig(path, dpi=150)
     plt.close(fig)
 
