@@ -20,7 +20,9 @@ ALG_COLORS: Dict[str, str] = {
 
 METRICS = [
     ('makespan', 'Makespan (lower is better)'),
-    ('energy_cost', 'Energy (arbitrary units, lower is better)')
+    ('energy_cost', 'Energy (arbitrary units, lower is better)'),
+    ('waiting_time', 'Waiting time (lower is better)'),
+    ('load_balance_ratio', 'Load balance ratio (closer to 1 is better)')
 ]
 
 
