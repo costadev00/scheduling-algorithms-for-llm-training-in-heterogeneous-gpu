@@ -1,4 +1,11 @@
-"""Generate a PEFT-like heterogeneous DAG with 256 tasks and 8 processors.
+"""Generate a PEFT-like heterogeneous DAG with 256 tasks and 16 processors.
+
+Enhancement: can inherit previously generated matrices (connectivity, exec time,
+bandwidth, power) from a smaller number de processadores (ex.: 8) para garantir
+comparabilidade entre cenários. Use --inherit-prefix apontando para o prefixo
+anterior (sem sufixo _task_exe_time.csv etc.). As primeiras colunas (P_0..P_{k-1})
+dos arquivos gerados serão idênticas às herdadas; novas colunas (k..15) são
+geradas mantendo o mesmo modelo estocástico.
 
 Design goals copied from the small peftgraph (10 tasks, 3 procs):
 - Moderate fan-out early then converging toward sinks.
@@ -24,7 +31,7 @@ Usage:
 
 """
 from __future__ import annotations
-import argparse, random, math, csv
+import argparse, random, math, csv, sys
 from pathlib import Path
 import numpy as np
 
@@ -142,25 +149,159 @@ def write_power(path_prefix:str, power_mat):
         for t in range(n_tasks):
             writer.writerow([f"T_{t}"] + [f"{power_mat[t,p]:.2f}" for p in range(n_procs)])
 
+def _load_inherit_exec(path_prefix: str):
+    path = Path(f"{path_prefix}_task_exe_time.csv")
+    if not path.exists():
+        return None
+    import numpy as np
+    with path.open() as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        procs = [h for h in header if h.startswith('P_')]
+        rows = []
+        for r in reader:
+            rows.append([int(x) for x in r[1:]])
+    mat = np.array(rows, dtype=int)
+    return mat
+
+def _load_inherit_power(path_prefix: str):
+    path = Path(f"{path_prefix}_task_power.csv")
+    if not path.exists():
+        return None
+    import numpy as np
+    with path.open() as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        rows = []
+        for r in reader:
+            rows.append([float(x) for x in r[1:]])
+    return np.array(rows, dtype=float)
+
+def _load_inherit_bw(path_prefix: str):
+    path = Path(f"{path_prefix}_resource_BW.csv")
+    if not path.exists():
+        return None
+    import numpy as np
+    with path.open() as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        rows = []
+        for r in reader:
+            rows.append([int(x) for x in r[1:]])
+    return np.array(rows, dtype=int)
+
+def _load_inherit_connectivity(path_prefix: str):
+    path = Path(f"{path_prefix}_task_connectivity.csv")
+    if not path.exists():
+        return None
+    edges=[]
+    with path.open() as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        n_tasks = len(header)-1
+        rows = list(reader)
+        for i,row in enumerate(rows):
+            src = i
+            weights = row[1:]
+            for j,w in enumerate(weights):
+                val = int(w)
+                if val>0:
+                    edges.append((src,j,val))
+    return edges, n_tasks
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tasks', type=int, default=DEF_TASKS)
     ap.add_argument('--procs', type=int, default=DEF_PROCS)
     ap.add_argument('--layers', type=int, default=6)
     ap.add_argument('--seed', type=int, default=42)
-    ap.add_argument('--prefix', required=True, help='Output file prefix, e.g. graphs/peft256')
+    ap.add_argument('--prefix', required=True, help='Output file prefix, e.g. graphs/Scenario_1/peft256_16proc')
+    ap.add_argument('--inherit-prefix', help='Prefix dos arquivos de um cenário menor (ex.: graphs/Scenario_1/peft256_8proc)')
+    ap.add_argument('--tolerance', type=float, default=0.0, help='Se >0, valida colunas herdadas vs geradas (diferença máxima permitida)')
     args=ap.parse_args()
 
-    layers, edges = build_dag(args.tasks, args.layers, seed=args.seed)
-    exec_mat, perf = gen_exec_matrix(args.tasks, args.procs, seed=args.seed+1)
-    power_mat = gen_power_matrix(exec_mat, perf, seed=args.seed+2)
+    inherit_exec = inherit_power = inherit_bw = inherit_edges = None
+    inherit_tasks = None
+    if args.inherit_prefix:
+        inherit_exec = _load_inherit_exec(args.inherit_prefix)
+        inherit_power = _load_inherit_power(args.inherit_prefix)
+        inherit_bw = _load_inherit_bw(args.inherit_prefix)
+        conn = _load_inherit_connectivity(args.inherit_prefix)
+        if conn:
+            inherit_edges, inherit_tasks = conn
+        if inherit_exec is None:
+            print(f"[warn] Não foi possível carregar exec de {args.inherit_prefix}", file=sys.stderr)
 
+    # DAG: reutiliza se herdado e mesmo número de tarefas
+    if inherit_edges and inherit_tasks == args.tasks:
+        edges = inherit_edges
+        print("Reutilizando conectividade herdada.")
+    else:
+        layers, edges = build_dag(args.tasks, args.layers, seed=args.seed)
+
+    exec_mat, perf = gen_exec_matrix(args.tasks, args.procs, seed=args.seed+1)
+
+    # Se herdando exec, garantir colunas idênticas
+    if inherit_exec is not None:
+        base_procs = inherit_exec.shape[1]
+        if base_procs >= args.procs:
+            print(f"[erro] base_procs={base_procs} >= novo procs={args.procs}", file=sys.stderr)
+            sys.exit(1)
+        if inherit_exec.shape[0] != args.tasks:
+            print(f"[erro] Número de tasks diferente na herança ({inherit_exec.shape[0]} vs {args.tasks})", file=sys.stderr)
+            sys.exit(1)
+        # opcional: verificar diferença vs geração (para debug)
+        if args.tolerance >= 0 and args.tolerance < float('inf'):
+            import numpy as np
+            diff = np.abs(exec_mat[:,:base_procs] - inherit_exec)
+            max_diff = diff.max()
+            if max_diff > args.tolerance:
+                print(f"[info] Substituindo colunas herdadas (desvio gerado={max_diff})")
+        exec_mat[:, :base_procs] = inherit_exec
+        inherited_cols = base_procs
+    else:
+        inherited_cols = 0
+
+    # Power completo com exec final (para correlação correta)
+    power_mat = gen_power_matrix(exec_mat, perf, seed=args.seed+2)
+    if inherit_power is not None:
+        if inherit_power.shape[0] == args.tasks and inherit_power.shape[1] == inherited_cols:
+            power_mat[:, :inherited_cols] = inherit_power
+        else:
+            print('[warn] Power herdado incompatível; ignorando.', file=sys.stderr)
+
+    # Bandwidth
+    bw_seed = args.seed+3
+    rng_bw = random.Random(bw_seed)
+    import numpy as np
+    bw_mat = np.zeros((args.procs, args.procs), dtype=int)
+    for i in range(args.procs):
+        for j in range(args.procs):
+            if i==j:
+                bw_mat[i,j]=0
+            else:
+                bw_mat[i,j] = 1 if rng_bw.random()<0.9 else 2
+    if inherit_bw is not None:
+        base = inherit_bw.shape[0]
+        if base == inherited_cols and inherit_bw.shape[1] == base:
+            bw_mat[:base,:base] = inherit_bw
+        else:
+            print('[warn] Bandwidth herdado incompatível; ignorando.', file=sys.stderr)
+
+    # Escrita arquivos
     write_connectivity(args.prefix, args.tasks, edges)
     write_exec(args.prefix, exec_mat)
-    write_bw(args.prefix, args.procs, seed=args.seed+3)
+    # sobrescrever write_bw para usar nossa matriz pronta
+    # Salvando banda
+    bw_path = Path(f"{args.prefix}_resource_BW.csv")
+    with bw_path.open('w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['P'] + [f"P_{p}" for p in range(args.procs)])
+        for i in range(args.procs):
+            w.writerow([f"P_{i}"] + list(map(int, bw_mat[i])))
     write_power(args.prefix, power_mat)
     print(f"Wrote PEFT-like scenario to prefix {args.prefix}")
-    print(f"Tasks={args.tasks}, Procs={args.procs}, Edges={len(edges)}")
+    print(f"Tasks={args.tasks}, Procs={args.procs}, Inherited={inherited_cols}, Edges={len(edges)}")
 
 if __name__ == '__main__':
     main()

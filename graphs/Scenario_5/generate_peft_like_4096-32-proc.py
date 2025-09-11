@@ -4,7 +4,7 @@ Same structure as Scenario 4; default 8 layers. Produces the 4 CSVs used by the
 comparison harness.
 """
 from __future__ import annotations
-import argparse, random, csv
+import argparse, random, csv, sys
 from pathlib import Path
 import numpy as np
 
@@ -111,6 +111,35 @@ def write_power(prefix:str, power_mat):
             w.writerow([f"T_{t}"] + [f"{power_mat[t,p]:.2f}" for p in range(n_procs)])
 
 
+def _load_matrix(prefix, suffix):
+    p=Path(f"{prefix}_{suffix}.csv")
+    if not p.exists(): return None
+    import csv as _csv
+    with p.open() as f:
+        r=_csv.reader(f); header=next(r)
+        rows=[row[1:] for row in r]
+    if 'exe_time' in suffix:
+        return np.array([[int(x) for x in row] for row in rows], dtype=int)
+    if 'power' in suffix:
+        return np.array([[float(x) for x in row] for row in rows], dtype=float)
+    if 'resource_BW' in suffix:
+        return np.array([[int(x) for x in row] for row in rows], dtype=int)
+    return None
+
+def _load_edges(prefix):
+    p=Path(f"{prefix}_task_connectivity.csv")
+    if not p.exists(): return None
+    import csv as _csv
+    with p.open() as f:
+        r=_csv.reader(f); header=next(r)
+        rows=list(r)
+    edges=[]
+    for i,row in enumerate(rows):
+        for j,val in enumerate(row[1:]):
+            v=int(val)
+            if v>0: edges.append((i,j,v))
+    return edges
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--tasks', type=int, default=DEF_TASKS)
@@ -118,18 +147,61 @@ def main():
     ap.add_argument('--layers', type=int, default=8)
     ap.add_argument('--seed', type=int, default=42)
     ap.add_argument('--prefix', required=True)
+    ap.add_argument('--inherit-prefix')
+    ap.add_argument('--tolerance', type=float, default=0.0)
     args=ap.parse_args()
 
-    layers, edges=build_dag(args.tasks, args.layers, seed=args.seed)
+    inherit_exec=inherit_power=inherit_bw=inherit_edges=None
+    if args.inherit_prefix:
+        inherit_exec=_load_matrix(args.inherit_prefix,'task_exe_time')
+        inherit_power=_load_matrix(args.inherit_prefix,'task_power')
+        inherit_bw=_load_matrix(args.inherit_prefix,'resource_BW')
+        inherit_edges=_load_edges(args.inherit_prefix)
+
+    if inherit_edges is not None:
+        edges=inherit_edges
+        print('Reutilizando conectividade herdada.')
+    else:
+        _, edges=build_dag(args.tasks, args.layers, seed=args.seed)
+
     exec_mat, perf=gen_exec_matrix(args.tasks, args.procs, seed=args.seed+1)
+    inherited_cols=0
+    if inherit_exec is not None:
+        if inherit_exec.shape[0]!=args.tasks:
+            print('[erro] tasks incompatíveis', file=sys.stderr); sys.exit(1)
+        base_cols=inherit_exec.shape[1]
+        if base_cols>=args.procs:
+            print('[erro] base possui >= colunas que alvo', file=sys.stderr); sys.exit(1)
+        diff=abs(exec_mat[:,:base_cols]-inherit_exec).max()
+        if diff>args.tolerance:
+            print(f'[info] Substituindo colunas herdadas (desvio={diff})')
+        exec_mat[:,:base_cols]=inherit_exec
+        inherited_cols=base_cols
+
     power_mat=gen_power_matrix(exec_mat, perf, seed=args.seed+2)
+    if inherit_power is not None and inherit_power.shape[1]==inherited_cols:
+        power_mat[:,:inherited_cols]=inherit_power
+
+    rng_bw=random.Random(args.seed+3)
+    bw=np.zeros((args.procs,args.procs),dtype=int)
+    for i in range(args.procs):
+        for j in range(args.procs):
+            if i==j: bw[i,j]=0
+            else: bw[i,j]=1 if rng_bw.random()<0.9 else 2
+    if inherit_bw is not None and inherit_bw.shape[0]==inherited_cols:
+        bw[:inherited_cols,:inherited_cols]=inherit_bw
 
     write_connectivity(args.prefix, args.tasks, edges)
     write_exec(args.prefix, exec_mat)
-    write_bw(args.prefix, args.procs, seed=args.seed+3)
+    path_bw=Path(f"{args.prefix}_resource_BW.csv")
+    with path_bw.open('w', newline='') as f:
+        w=csv.writer(f)
+        w.writerow(['P']+[f"P_{p}" for p in range(args.procs)])
+        for i in range(args.procs):
+            w.writerow([f"P_{i}"]+list(map(int,bw[i])))
     write_power(args.prefix, power_mat)
 
-    print(f"Wrote PEFT-like scenario to prefix {args.prefix}")
+    print(f"Wrote PEFT-like scenario to prefix {args.prefix} (Inherited={inherited_cols})")
     print(f"Tasks={args.tasks}, Procs={args.procs}, Edges={len(edges)}")
 
 if __name__ == '__main__':
