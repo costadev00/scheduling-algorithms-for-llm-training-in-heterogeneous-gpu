@@ -2,7 +2,7 @@
 
 # Scheduling Algorithms for Heterogeneous GPU Task Graphs
 
-Baseline, paper-faithful Python implementations of six classic / illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous PE) systems.
+Baseline, paper-faithful Python implementations of six classic / illustrative heterogeneous DAG scheduling heuristics for mapping large	 training or pipeline workloads onto multi‑GPU (heterogeneous PE) systems.
 
 </div>
 
@@ -21,22 +21,96 @@ Included algorithms:
 
 Energy accounting is post‑hoc only; scheduling is performance‑centric.
 
-## 2. Quick Start (PowerShell)
-Clone & install minimal deps (if `requirements.txt` is empty, install manually):
-```powershell
-python -m pip install numpy networkx matplotlib pydot
-```
-Optionally install `graphviz` system package if you want DOT‑quality DAG plots; otherwise a fallback layout is used.
+## 2. Benchmarking Entrypoint: `compare_same_dataset.py`
+`compare_same_dataset.py` is the primary script for this project. It loads one DAG instance (a quadruple of CSV files), runs one or more algorithms, prints metrics as JSON (1 line per algorithm), and optionally writes visual artifacts.
 
-Verify a simple run (canonical small graph):
+### 2.1 Script Arguments
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--dag` | Yes | Task connectivity CSV (edge weights = data volume) |
+| `--exec` | Yes | Task execution time matrix CSV |
+| `--bw` | Yes | Processor bandwidth matrix CSV |
+| `--power` | No  | Task power matrix (enables energy metric & energy bar) |
+| `--algos` | Yes | Comma list subset of `DLS,HEFT,HEFT-LA,PEFT,IHEFT,IPEFT` |
+| `--out_dir` | No | Directory to store `gantt_*.png`, `metrics.png`, `dag.png` (if requested) |
+| `--save_dag` | No | Generate `dag.png` (Graphviz if available, otherwise fallback layout) |
+| `--plot_metrics` | No | Save multi-bar metrics figure (`metrics.png`) |
+
+Minimum viable command (metrics only, console output):
+```powershell
+python compare_same_dataset.py `
+  --dag graphs/canonicalgraph_task_connectivity.csv `
+  --exec graphs/canonicalgraph_task_exe_time.csv `
+  --bw  graphs/canonicalgraph_resource_BW.csv `
+  --algos HEFT,PEFT
+```
+
+Full artifact command (adds Gantts + metrics plot):
+```powershell
+python compare_same_dataset.py `
+  --dag graphs/Scenario_1/peft256_8proc_task_connectivity.csv `
+  --exec graphs/Scenario_1/peft256_8proc_task_exe_time.csv `
+  --bw  graphs/Scenario_1/peft256_8proc_resource_BW.csv `
+  --power graphs/Scenario_1/peft256_8proc_task_power.csv `
+  --algos DLS,HEFT,HEFT-LA,PEFT,IHEFT,IPEFT `
+  --out_dir outputs/scenario1_256x8_labels `
+  --save_dag --plot_metrics
+```
+
+### 2.2 Batch Running a Scenario Family
+Run all processor counts (8/16/32) for Scenario 3 (example PowerShell loop):
+```powershell
+foreach ($p in 8,16,32) {
+  python compare_same_dataset.py `
+    --dag   graphs/Scenario_3/peft1024_${p}proc_task_connectivity.csv `
+    --exec  graphs/Scenario_3/peft1024_${p}proc_task_exe_time.csv `
+    --bw    graphs/Scenario_3/peft1024_${p}proc_resource_BW.csv `
+    --power graphs/Scenario_3/peft1024_${p}proc_task_power.csv `
+    --algos HEFT,PEFT,DLS,HEFT-LA,IHEFT,IPEFT `
+    --out_dir outputs/scenario3_1024x${p}_labels `
+    --plot_metrics   # omit --save_dag to speed up large runs
+}
+```
+
+### 2.3 Capturing Metrics to a File
+Append JSON lines to a log while still seeing console output:
 ```powershell
 python compare_same_dataset.py `
   --dag graphs/canonicalgraph_task_connectivity.csv `
   --exec graphs/canonicalgraph_task_exe_time.csv `
   --bw graphs/canonicalgraph_resource_BW.csv `
-  --algos HEFT,PEFT,DLS --plot_metrics --out_dir outputs/demo_canonical
+  --algos HEFT,PEFT,DLS | Tee-Object -FilePath outputs/run_log.jsonl -Append
 ```
-You will see one JSON line per algorithm + `metrics.png` and Gantt charts.
+
+### 2.4 Typical Benchmark Workflow
+1. Pick scenario CSV set (or create your own).  
+2. Run `compare_same_dataset.py` for each (tasks, processors) variant.  
+3. (Optional) Re-run with fewer algorithms to isolate differences.  
+4. (Optional) Aggregate with `aggregate_all_results.py` then visualize cross‑scenario trends via `plot_aggregate_results.py`.  
+5. Inspect per-run Gantt & metrics to understand differences (look for load balance, comm dominance).  
+
+### 2.5 Dependency Setup
+Install requirements (or minimal manual list if the file is empty):
+```powershell
+python -m pip install -r requirements.txt
+# OR minimal manual:
+python -m pip install numpy networkx matplotlib pydot
+```
+Install Graphviz (optional, for nicer DAG layout). Without it the fallback layout path is used automatically.
+
+### 2.6 Performance Tips
+| Situation | Tip |
+|-----------|-----|
+| Large task counts (≥2048) | Drop `--save_dag` to skip heavy layout |
+| Many repeated runs | Omit `--plot_metrics` until final pass |
+| Focus on scheduling core | Use a reduced algo list (e.g. `--algos HEFT,PEFT`) |
+| Fast iteration | Run single small scenario (256×8) before scaling up |
+
+### 2.7 Exit Codes
+* Non‑zero exit only if: unsupported algorithm requested OR internal exception while reading CSVs / scheduling.
+* Missing algorithms (import failures) are excluded silently—confirm by checking printed JSON lines contain all requested names.
+
+---
 
 ## 3. Input Data Model
 Each scheduling instance is specified by 3–4 CSV matrices (header row + column):
@@ -51,7 +125,7 @@ File naming convention for provided scenarios:
 `peft{TASKS}_{PROCS}proc_resource_BW.csv`
 `peft{TASKS}_{PROCS}proc_task_power.csv`
 
-## 4. Running Provided Scenarios
+## 4. Running Provided Scenarios (Alternative View)
 Scenarios 1–5 scale task counts (256, 512, 1024, 2048, 4096) and processors (8,16,32). Run one variant (example: Scenario 1, 256 tasks, 8 procs):
 ```powershell
 python compare_same_dataset.py `
@@ -74,7 +148,7 @@ Use a subset, e.g. only HEFT & PEFT:
 --algos HEFT,PEFT
 ```
 
-## 5. Aggregated Metrics & Global Plots
+## 5. Aggregated Metrics & Global Plots (Optional Layer)
 After regenerating scenarios you can rebuild cross‑scenario summaries (if you have the aggregator script populated):
 ```powershell
 python aggregate_all_results.py
@@ -150,7 +224,14 @@ If you use this baseline, cite the original papers:
 * (Add the specific IHEFT / IPEFT source once finalized)
 
 ## 13. License
-Add your chosen license text in a future update (currently unspecified).
+Released under the **MIT License**. See the [`LICENSE`](./LICENSE) file for full text.
+You may freely use, modify, distribute, and sublicense the code provided the
+copyright and license notices are preserved.
+
+Badge suggestion (optional):
+```
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+```
 
 ---
 Contributions (bug fixes, focused extensions) are welcome—please keep core algorithm logic faithful to source papers.
