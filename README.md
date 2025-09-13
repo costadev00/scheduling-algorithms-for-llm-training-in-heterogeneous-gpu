@@ -228,10 +228,6 @@ Released under the **MIT License**. See the [`LICENSE`](./LICENSE) file for full
 You may freely use, modify, distribute, and sublicense the code provided the
 copyright and license notices are preserved.
 
-Badge suggestion (optional):
-```
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-```
 
 ---
 Contributions (bug fixes, focused extensions) are welcome—please keep core algorithm logic faithful to source papers.
