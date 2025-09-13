@@ -157,7 +157,15 @@ def _save_dag_image(dag:nx.DiGraph, path:Path):
     try:
         pos=nx.nx_pydot.graphviz_layout(dag, prog='dot')
     except Exception:
-        pos=nx.spring_layout(dag, seed=42)
+        # Fallback chain that avoids hard failure if optional deps (Graphviz / SciPy) missing.
+        # spring_layout may require SciPy for performance; if SciPy absent, try pure-Python layouts.
+        try:
+            pos=nx.spring_layout(dag, seed=42)
+        except Exception:
+            try:
+                pos=nx.kamada_kawai_layout(dag)
+            except Exception:
+                pos=nx.shell_layout(dag)
     nx.draw(dag, pos=pos, with_labels=True, node_size=300, font_size=8)
     plt.title('DAG')
     plt.tight_layout()

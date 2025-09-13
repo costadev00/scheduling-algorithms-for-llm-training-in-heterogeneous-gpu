@@ -1,166 +1,156 @@
+<div align="center">
+
 # Scheduling Algorithms for Heterogeneous GPU Task Graphs
 
-This project provides clean, paper-faithful Python implementations of classic heterogeneous DAG scheduling heuristics (plus a simple single‑step lookahead variant) used to map a task graph onto multiple GPUs / processing elements (PEs):
+Baseline, paper-faithful Python implementations of six classic / illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous PE) systems.
 
-- **HEFT** (Heterogeneous Earliest Finish Time) – Topcuoglu et al., 2002
-- **PEFT** (Predict Earliest Finish Time) – Arabnejad & Barbosa, 2014
-- **DLS** (Dynamic Level Scheduling, DL1 variant) – Sih & Lee, 1993 (characterized by Hagras & Janeček, 2003)
-- **HEFT‑LA** (Lookahead HEFT, 1‑level child EFT sum) – Lightweight extension that scores a candidate processor for task t by EFT(t,p) + Σ predicted earliest child EFTs assuming t placed on p. Demonstrates benefit on high fan‑out / heterogeneous successor patterns.
-- **IHEFT** (Improved HEFT from provided paper) – Modified upward rank using heterogeneity Weight_ni and a stochastic cross-over rule between global EFT-minimizing processor and local fastest-exec processor based on dynamic threshold.
-- **IPEFT** (Improved PEFT; dual pessimistic / critical-node cost tables) – Extends PEFT by blending pessimistic and critical-successor–focused continuation costs (PCT & CNCT) plus average earliest/latest start analysis to emphasize likely critical path nodes when ranking and selecting processors.
+</div>
 
-Both implementations are trimmed to their canonical algorithmic logic (no custom energy-aware heuristics). They expose identical helper utilities for loading CSV inputs and computing schedule quality metrics, enabling fair side‑by‑side evaluation.
+## 1. Purpose & Scope
+This repository provides a reproducible reference to compare list‑scheduling heuristics on synthetic or real task graphs that model large model (LLM) training or data‑parallel / pipeline stages. All algorithms share a common I/O format and metric computation so differences reflect their decision logic—not instrumentation artifacts.
 
-## Project Goal
-Provide a reproducible baseline for comparing HEFT, PEFT, DLS, and an illustrative HEFT lookahead variant (HEFT‑LA) on heterogeneous GPU task graphs using only the decision rules described in the original papers (except the clearly marked optional lookahead). This baseline supports research on scheduling for large model (LLM) training pipelines, synthetic DAG benchmarks, and educational exploration of classic list scheduling heuristics.
+Included algorithms:
+| Acronym | Description | Notes |
+|---------|-------------|-------|
+| HEFT | Heterogeneous Earliest Finish Time | Canonical 2002 algorithm |
+| PEFT | Predict Earliest Finish Time | OCT continuation costs |
+| DLS | Dynamic Level Scheduling (DL1) | Median‑based level scoring |
+| HEFT‑LA | 1‑level Lookahead HEFT | Educational, child EFT sum |
+| IHEFT | Improved HEFT variant | Heterogeneity weight + stochastic crossover |
+| IPEFT | Improved PEFT variant | Dual pessimistic / critical continuation tables |
 
-## Input Data Model
-Each workload (DAG scheduling instance) is defined by CSV matrices (with header row + column):
-- Task connectivity matrix: edge weight = communication load (data volume) from parent to child.
-- Task execution matrix: rows=tasks, cols=processors; entry = execution time of task on that processor.
-- Processor bandwidth matrix: bandwidth (rate) between processors (diagonal typically 0 or ignored). Communication time = edge load / bandwidth if tasks mapped to different processors; 0 otherwise.
-- (Optional) Task power matrix: power(task, processor) values used only for post‑hoc energy accounting (not for scheduling decisions).
+Energy accounting is post‑hoc only; scheduling is performance‑centric.
 
-## Setup
+## 2. Quick Start (PowerShell)
+Clone & install minimal deps (if `requirements.txt` is empty, install manually):
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install numpy networkx matplotlib pydot
 ```
+Optionally install `graphviz` system package if you want DOT‑quality DAG plots; otherwise a fallback layout is used.
 
-## Run (Canonical Example Datasets)
-Example CSVs reside under `heft/test/` and `peft/test/`.
-
-HEFT (report + optional Gantt chart):
+Verify a simple run (canonical small graph):
 ```powershell
-python -m heft.heft --report --showGantt `
-	-d heft/test/canonicalgraph_task_connectivity.csv `
-	-p heft/test/canonicalgraph_resource_BW.csv `
-	-t heft/test/canonicalgraph_task_exe_time.csv
+python compare_same_dataset.py `
+  --dag graphs/canonicalgraph_task_connectivity.csv `
+  --exec graphs/canonicalgraph_task_exe_time.csv `
+  --bw graphs/canonicalgraph_resource_BW.csv `
+  --algos HEFT,PEFT,DLS --plot_metrics --out_dir outputs/demo_canonical
 ```
+You will see one JSON line per algorithm + `metrics.png` and Gantt charts.
 
-PEFT (report + optional Gantt chart):
-DLS (DL1 variant; report + optional Gantt chart):
+## 3. Input Data Model
+Each scheduling instance is specified by 3–4 CSV matrices (header row + column):
+1. Connectivity (tasks × tasks): edge weight = data volume parent→child (0 if none).
+2. Execution times (tasks × processors): time(task, proc).
+3. Bandwidth (processors × processors): rate(proc_i, proc_j). Comm time = load / bw if mapped to different procs.
+4. (Optional) Power (tasks × processors): power draw used only for energy = Σ (duration × power).
+
+File naming convention for provided scenarios:
+`peft{TASKS}_{PROCS}proc_task_connectivity.csv`
+`peft{TASKS}_{PROCS}proc_task_exe_time.csv`
+`peft{TASKS}_{PROCS}proc_resource_BW.csv`
+`peft{TASKS}_{PROCS}proc_task_power.csv`
+
+## 4. Running Provided Scenarios
+Scenarios 1–5 scale task counts (256, 512, 1024, 2048, 4096) and processors (8,16,32). Run one variant (example: Scenario 1, 256 tasks, 8 procs):
 ```powershell
-python -m dls.dls --report --showGantt `
-	--dag_file graphs/canonicalgraph_task_connectivity.csv `
-	--exec_file graphs/canonicalgraph_task_exe_time.csv `
-	--bw_file graphs/canonicalgraph_resource_BW.csv
+python compare_same_dataset.py `
+  --dag   graphs/Scenario_1/peft256_8proc_task_connectivity.csv `
+  --exec  graphs/Scenario_1/peft256_8proc_task_exe_time.csv `
+  --bw    graphs/Scenario_1/peft256_8proc_resource_BW.csv `
+  --power graphs/Scenario_1/peft256_8proc_task_power.csv `
+  --algos DLS,HEFT,HEFT-LA,PEFT,IHEFT,IPEFT `
+  --out_dir outputs/scenario1_256x8_labels `
+  --save_dag --plot_metrics
 ```
+Repeat by swapping the filenames for `_16proc_` or `_32proc_`, and for other `Scenario_N` directories.
 
-Unified comparison including DLS, HEFT‑LA and IHEFT:
+### Fast Re-run Without DAG Image
+Skip DAG plotting (faster at large scale) by omitting `--save_dag`.
+
+### Algorithms Subset
+Use a subset, e.g. only HEFT & PEFT:
 ```powershell
-python compare_same_dataset.py --dag graphs/canonicalgraph_task_connectivity.csv `
-	--exec graphs/canonicalgraph_task_exe_time.csv --bw graphs/canonicalgraph_resource_BW.csv `
-	--algos HEFT,PEFT,DLS,HEFT-LA,IHEFT,IPEFT --report
+--algos HEFT,PEFT
 ```
+
+## 5. Aggregated Metrics & Global Plots
+After regenerating scenarios you can rebuild cross‑scenario summaries (if you have the aggregator script populated):
 ```powershell
-python -m peft.peft --report --showGantt `
-	-d peft/test/canonicalgraph_task_connectivity.csv `
-	-p peft/test/canonicalgraph_resource_BW.csv `
-	-t peft/test/canonicalgraph_task_exe_time.csv
+python aggregate_all_results.py
+python plot_aggregate_results.py   # writes per-scenario & comparative plots to outputs/plots/
 ```
+Artifacts:
+* `outputs/aggregate_metrics.jsonl` – one JSON object per (scenario, procs, algorithm)
+* `outputs/aggregate_metrics.csv`   – tabular form
+* `outputs/plots/*.png`             – metric comparisons (makespan, energy, waiting time, load balance, etc.)
 
-Minimal run (no Gantt, metrics only) – remove `--showGantt`.
+## 6. Output Artifacts (Per Run)
+Inside `--out_dir` you may see:
+| File | Meaning |
+|------|---------|
+| `dag.png` | (Optional) DAG visualization (Graphviz or fallback layout) |
+| `gantt_<ALG>.png` | Per‑algorithm schedule (processor lanes vs time) |
+| `metrics.png` | Bar charts: makespan, load balance ratio, waiting time (+ energy if power provided) |
+| Console JSON lines | Machine‑readable metrics for downstream aggregation |
 
-### Output Metrics (`--report`)
-Printed for both algorithms:
-- Makespan
-- Total & per‑processor idle time
-- Load balance stats (busy time per processor, coefficient of variation, imbalance ratio, Jain’s fairness)
-- Average waiting time (mean task start)
-- (If power CSV provided) Energy = Σ(duration × power)
+Metric definitions:
+* Makespan: max task finish time.
+* Load balance ratio: makespan / (average busy time). Closer to 1 is better.
+* Waiting time: average task ready‑to‑start latency.
+* Communication cost: sum of edge data / bw for cross‑processor edges encountered.
+* Energy (optional): Σ (task duration × power(task, proc)).
 
-## Testing
-Lightweight tests validate metric helpers:
-```powershell
-pytest
-```
+## 7. Algorithm Decision Logic (Concise)
+* **HEFT**: Upward rank (avg exec + max succ (comm + rank)); choose proc with earliest finish via insertion.
+* **PEFT**: Precompute optimistic continuation table (OCT); rank by mean OCT row; choose proc minimizing EFT + OCT.
+* **DLS (DL1)**: Dynamic level = static level − earliest start + (median exec − exec(task, proc)); pick max each step.
+* **HEFT‑LA**: HEFT order; processor score = EFT(task, p) + Σ predicted earliest child EFT if task on p.
+* **IHEFT**: Modified upward rank with heterogeneity weight; stochastic crossover between best EFT and fastest local exec.
+* **IPEFT**: Dual tables (PCT worst‑case, CNCT critical successors) + slack based criticality; score = EFT + CNCT.
 
-## Code Structure
-```
-heft/
-	heft/heft.py        # Canonical HEFT implementation
-	heft/gantt.py       # Gantt chart rendering helper
-	heft/dag_merge.py   # (Optional) DAG merge utilities for multi-workflow experiments
-peft/
-	peft/peft.py        # Canonical PEFT implementation
-graphs/               # Input CSVs + generated plots/reports
-```
+## 8. Adding / Modifying a Scenario
+1. Generate new CSV matrices (follow header format of existing ones).  
+2. Place them in a new `graphs/Scenario_X/` folder using the same naming pattern.  
+3. Run `compare_same_dataset.py` with appropriate `--dag/--exec/--bw/--power` arguments.  
+4. (Optional) Re‑aggregate & re‑plot.  
 
-## Algorithm Summary
-HEFT:
-1. Compute upward rank: avg exec time + max(successor rank + normalized comm).
-2. Schedule tasks in descending rank; per task choose processor with earliest finish (insertion heuristic).
+## 9. Limitations / Design Choices
+| Aspect | Current Behavior |
+|--------|------------------|
+| Task granularity | Tasks are atomic (no splitting across processors) |
+| Preemption | Not supported (non‑preemptive once started) |
+| Energy-aware placement | Not implemented; energy purely observational |
+| Network model | Static bandwidth matrix, constant rate |
+| Randomness | IHEFT uses fixed seed (42) for reproducibility |
 
-PEFT:
-DLS (DL1 variant implemented):
-1. Compute static levels SL* using median execution time per task (heterogeneity-aware).
-2. At each step evaluate all (ready task, processor) pairs with DL1(t,p)=SL*(t) - EST(t,p) + (median_exec(t) - exec(t,p)).
-3. Pick pair with maximum DL1 (tie-break: lower EST, task id, processor id) and schedule using insertion-based earliest start.
-4. Recompute dynamic levels and repeat until all tasks scheduled.
-1. Build Optimistic Cost Table (OCT).
-2. Rank = mean OCT row; order by descending rank.
-3. For each task choose processor minimizing (EFT + OCT[task, proc]).
+To simulate splitting a large task, manually decompose it into multiple subtasks and adjust edges accordingly (see discussion in issues / docs if added later).
 
-HEFT‑LA (1‑level lookahead variant, not a published algorithm but a didactic extension):
-1. Use the same HEFT upward rank ordering.
-2. For each ready task t and processor p, compute EFT(t,p) via insertion policy.
-3. For each child c of t, temporarily assume t ends at that EFT on p and estimate earliest child finish on its best processor (ignoring contention) => predicted_EFT_child.
-4. Score S(t,p)=EFT(t,p)+Σ predicted_EFT_child; pick p with minimal score (ties: earliest EFT, lower proc id).
-5. Falls back to HEFT behavior when fan‑out is 0 or successors homogeneous.
+## 10. Troubleshooting
+| Symptom | Cause / Fix |
+|---------|-------------|
+| `"dot" not found` | Install Graphviz or omit `--save_dag` (fallback layout used otherwise). |
+| `ModuleNotFoundError: scipy` | Not required; fallback layout path avoids SciPy—ignore or install `scipy`. |
+| Blank / empty plots | Ensure algorithms you requested are available (import errors silently drop ones not installed). |
+| Very large makespan for DLS | Expected on highly heterogeneous / communication heavy graphs; compare relative metrics. |
 
-Lookahead demonstration dataset (graphs/lookahead_graph_*):
-IHEFT (Improved HEFT):
-1. Compute Weight_ni = | (max_exec_i - min_exec_i) / (max_exec_i / min_exec_i) | per task capturing heterogeneity dispersion.
-2. Modified upward rank: rank_i = Weight_ni + max_{succ j} ( normalized_comm_{i,j} + rank_j ).
-3. Order tasks by decreasing rank.
-4. For each task evaluate insertion-based EFT on all processors; record processor with minimum execution time separately.
-5. If both processors identical choose it; else compute Weight_abstract = | (EFT_best - EFT_execBest) / (EFT_best / EFT_execBest) | and Cross_Threshold = Weight_ni / Weight_abstract.
-6. Draw r ~ Uniform[0.1,0.3]; if Cross_Threshold <= r select fastest-exec processor (local); else select min-EFT (global).
-Stochastic element can yield schedules equal to or different from canonical HEFT; seed fixed (42) for reproducibility in current implementation.
-```powershell
-python compare_same_dataset.py --dag graphs/lookahead_graph_task_connectivity.csv `
-	--exec graphs/lookahead_graph_task_exe_time.csv --bw graphs/lookahead_graph_resource_BW.csv `
-	--algos HEFT,HEFT-LA,PEFT,DLS --report --tag lookahead_demo
-```
-Example result (may vary slightly with environment): HEFT makespan 94.5 vs HEFT‑LA 93.5 with markedly lower communication cost due to child‑aware placement of the high fan‑out root.
+## 11. Extending the Codebase
+Potential research directions (not in baseline to preserve paper fidelity):
+* Multi‑objective (energy / thermal) scoring.
+* Online DAG arrivals & merging.
+* Divisible / malleable tasks (fractional scheduling) – requires redesign of schedule & metrics.
+* Adaptive communication compression models.
 
-IPEFT (Improved PEFT):
-1. Precompute average execution time per task (used in several averages) and average communication cost (edge load / mean bandwidth) for normalized continuity.
-2. For each task compute AEST (Average Earliest Start Time) and ALST (Average Latest Start Time) by propagating mean start bounds forward/backward over processors; this yields slack windows identifying potentially critical successors (low slack = high criticality).
-3. Identify critical successors of each task: a child is critical if its (ALST - AEST) slack is below a small epsilon (implementation uses numerical tolerance) or minimal among its sibling set.
-4. Build Pessimistic Cost Table (PCT): PCT[i,p] = exec(i,p) + max_{succ j} ( max_{q} ( comm(i,j,p,q) + PCT[j,q] ) ). This assumes worst-case (slowest) continuation across children & processors, biasing ranks toward tasks whose worst descendant chains are long.
-5. Build Critical-Node Cost Table (CNCT): Similar recursion but considers only critical successors and takes for each critical successor the best continuation processor: CNCT[i,p] = exec(i,p) + max_{crit succ j} ( min_{q} ( comm(i,j,p,q) + CNCT[j,q] ) ). If no critical successors, CNCT[i,p] = exec(i,p).
-6. Rank (rankPCT) of task i = mean_p PCT[i,p] + mean execution time of i (adds intrinsic weight; mirrors provided specification).
-7. Order tasks by decreasing rankPCT (list scheduling order).
-8. For each ready task, evaluate insertion-based Earliest Finish Time (EFT) on every processor. Processor score = EFT + CNCT[i,p]. Ties broken by earlier EFT then lower processor id.
-9. Insert task at earliest legal start (respecting precedence & existing reservations) as in HEFT/PEFT.
-10. Proceed until all tasks scheduled; metrics reported identically.
-
-Differences vs PEFT: PEFT relies on a single optimistic (best-continuation) OCT table and ranks via its row mean; IPEFT introduces dual pessimistic (PCT) and critical-focused (CNCT) tables plus critical-successor filtering via AEST/ALST slack, aiming to improve discrimination on true critical path tasks while still guarding against worst-case branching. Official default: critical nodes ARE penalized (i.e. not exempt) so their processor choice still considers CNCT continuation impact. A flag (`--ipeft_exempt_cn`) can be used to revert to the earlier experimental behavior that exempted CN from penalty.
-
-Config toggles: `--ipeft_rank_include_avg_exec` (adds avg exec time into rank) and `--ipeft_exempt_cn` (do not penalize CN). Communication averaging mode is fixed (reciprocal of mean bandwidth) and no longer configurable.
-
-Empirical note (included example runs in this repo): On a dense 120-task synthetic graph IPEFT produced a slightly higher makespan than PEFT in one seed (reflecting heuristic variability) but reduced load imbalance. Behavior will vary with communication heterogeneity; further tuning of slack threshold or CNCT blending may improve results.
-
-## Energy Handling
-Energy is not part of placement logic; if a power matrix is supplied it’s aggregated post‑schedule for reporting only.
-
-## Extending
-Potential extensions (not included to keep paper fidelity):
-- Energy‑aware rank weighting or multi‑objective scoring
-- Dynamic voltage/frequency scaling (DVFS) models
-- Online arrival of workflows using `dag_merge` strategies
-
-## Citation
+## 12. Citation
 If you use this baseline, cite the original papers:
-- H. Topcuoglu, S. Hariri, M.-Y. Wu, "Performance-Effective and Low-Complexity Task Scheduling for Heterogeneous Computing", IEEE TPDS, 2002.
-- H. Arabnejad, J. Barbosa, "List Scheduling Algorithm for Heterogeneous Systems by an Optimistic Cost Table", IEEE TPDS, 2014.
-- G. C. Sih, E. A. Lee, "A Compile-Time Scheduling Heuristic for Interconnection-Constrained Heterogeneous Processor Architectures", IEEE TPDS (DLS), 1993.
-- T. Hagras, J. Janeček, "Static vs. dynamic list-scheduling performance comparison", Acta Polytechnica, 2003.
-- (Add citation for the IPEFT improvement paper once bibliographic details are finalized.)
+* H. Topcuoglu, S. Hariri, M.-Y. Wu, 2002 (HEFT)
+* H. Arabnejad, J. Barbosa, 2014 (PEFT)
+* G. C. Sih, E. A. Lee, 1993 (DLS)
+* T. Hagras, J. Janeček, 2003 (DLS characterization)
+* (Add the specific IHEFT / IPEFT source once finalized)
 
-## License
-(Add license information here if applicable.)
+## 13. License
+Add your chosen license text in a future update (currently unspecified).
 
 ---
-Paper‑only baseline; contributions welcome for optional experimental branches.
+Contributions (bug fixes, focused extensions) are welcome—please keep core algorithm logic faithful to source papers.
