@@ -17,7 +17,7 @@ SCENARIOS = [
     ('Scenario_4', 2048),
     ('Scenario_5', 4096),
 ]
-PROCS = [8, 16, 32]
+PROCS = [8, 16, 32, 48, 128, 256]
 ALGOS = 'DLS,HEFT,HEFT-LA,PEFT,IHEFT,IPEFT'
 
 rows = []

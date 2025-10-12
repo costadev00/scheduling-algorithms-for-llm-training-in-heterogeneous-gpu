@@ -195,33 +195,102 @@ def main():
     else:
         _, edges = build_dag(args.tasks, args.layers, seed=args.seed)
 
-    exec_mat, perf = gen_exec_matrix(args.tasks, args.procs, seed=args.seed+1)
     inherited_cols=0
+    # Build execution-time matrix: if inheritance provided, copy top-left block exactly
     if inherit_exec is not None:
         if inherit_exec.shape[0]!=args.tasks:
             print('[erro] tasks incompatíveis', file=sys.stderr); sys.exit(1)
-        base_cols=inherit_exec.shape[1]
-        if base_cols>=args.procs:
-            print('[erro] base possui >= colunas que alvo', file=sys.stderr); sys.exit(1)
-        if args.tolerance>=0:
-            diff=abs(exec_mat[:,:base_cols]-inherit_exec).max()
-            if diff>args.tolerance:
-                print(f'[info] Substituindo colunas herdadas (desvio={diff})')
-        exec_mat[:,:base_cols]=inherit_exec
-        inherited_cols=base_cols
+        base_cols = inherit_exec.shape[1]
+        if base_cols > args.procs:
+            print('[erro] base possui > colunas que alvo', file=sys.stderr); sys.exit(1)
+        # create target exec matrix and copy inherited columns verbatim
+        exec_mat = np.zeros((args.tasks, args.procs), dtype=int)
+        exec_mat[:, :base_cols] = inherit_exec
+        inherited_cols = base_cols
+        # deterministically generate remaining columns based on inherited statistics
+        if args.procs > base_cols:
+            rng = np.random.default_rng(args.seed+1)
+            base_mean = inherit_exec.mean(axis=1)
+            base_std = inherit_exec.std(axis=1)
+            # avoid zero std: small fraction of mean or 1
+            base_std = np.where(base_std == 0, np.maximum(1.0, 0.05 * base_mean), base_std)
+            for p in range(base_cols, args.procs):
+                noise = rng.normal(0.0, 0.1, size=args.tasks)
+                col = base_mean + noise * base_std
+                col = np.round(col).astype(int)
+                col[col < 1] = 1
+                exec_mat[:, p] = col
+    else:
+        exec_mat, perf = gen_exec_matrix(args.tasks, args.procs, seed=args.seed+1)
 
-    power_mat = gen_power_matrix(exec_mat, perf, seed=args.seed+2)
-    if inherit_power is not None and inherit_power.shape[1]==inherited_cols:
-        power_mat[:,:inherited_cols]=inherit_power
+    # Power matrix: preserve inherited columns if present, otherwise derive from exec
+    if inherit_power is not None and inherited_cols>0:
+        power_mat = np.zeros((args.tasks, args.procs), dtype=float)
+        # copy inherited block
+        power_mat[:, :inherited_cols] = inherit_power
+        # generate remaining columns deterministically from inherited power statistics
+        if args.procs > inherited_cols:
+            rngp = np.random.default_rng(args.seed+2)
+            base_mean_p = inherit_power.mean(axis=1)
+            base_std_p = inherit_power.std(axis=1)
+            base_std_p = np.where(base_std_p == 0, np.maximum(0.01, 0.05 * base_mean_p), base_std_p)
+            for p in range(inherited_cols, args.procs):
+                noise = rngp.normal(0.0, 0.08, size=args.tasks)
+                col = base_mean_p + noise * base_std_p
+                col = np.round(col, 2)
+                col[col < 0.1] = 0.1
+                power_mat[:, p] = col
+    else:
+        # derive power from exec_mat using original gen_power_matrix behavior
+        # attempt to recover perf multipliers if available, otherwise call generator
+        try:
+            # if we generated exec_mat via gen_exec_matrix earlier, 'perf' exists
+            power_mat = gen_power_matrix(exec_mat, perf, seed=args.seed+2)
+        except Exception:
+            # fallback: generate power purely from per-task statistics
+            rngp = np.random.default_rng(args.seed+2)
+            n_tasks, n_procs = exec_mat.shape
+            power_mat = np.zeros((n_tasks, n_procs), dtype=float)
+            task_mean = exec_mat.mean(axis=1)
+            task_std = exec_mat.std(axis=1)
+            task_std = np.where(task_std==0, np.maximum(1.0, 0.05*task_mean), task_std)
+            for p in range(n_procs):
+                noise = rngp.normal(0.0, 0.1, size=n_tasks)
+                col = 1.5 + (1.0/(1.0 + noise)) * 0.9
+                power_mat[:, p] = np.round(col, 2)
 
-    rng_bw=random.Random(args.seed+3)
-    bw=np.zeros((args.procs,args.procs),dtype=int)
-    for i in range(args.procs):
-        for j in range(args.procs):
-            if i==j: bw[i,j]=0
-            else: bw[i,j]=1 if rng_bw.random()<0.9 else 2
-    if inherit_bw is not None and inherit_bw.shape[0]==inherited_cols:
-        bw[:inherited_cols,:inherited_cols]=inherit_bw
+    # Bandwidth matrix: preserve inherited top-left block and deterministically fill new rows/cols
+    bw = np.zeros((args.procs, args.procs), dtype=int)
+    if inherit_bw is not None and inherited_cols>0:
+        base_bw = inherit_bw
+        base_p = base_bw.shape[0]
+        bw[:base_p, :base_p] = base_bw
+        rngbw = np.random.default_rng(args.seed+3)
+        # fill new rows/cols using sampled templates from base rows to preserve distribution
+        for i in range(base_p, args.procs):
+            template_idx = int(rngbw.integers(0, base_p))
+            template_row = base_bw[template_idx, :base_p].copy()
+            # small deterministic perturbation (flip some 1s->2s or keep)
+            pert = rngbw.random(base_p) < 0.05
+            newrow = template_row.copy()
+            newrow = np.where(pert, np.minimum(2, newrow+1), newrow)
+            bw[i, :base_p] = newrow
+            bw[:base_p, i] = newrow
+        # fill new-new cells with modal value of base (1) or small random 1/2
+        flat = base_bw.flatten()
+        modal = 1
+        for i in range(base_p, args.procs):
+            for j in range(base_p, args.procs):
+                if i==j:
+                    bw[i,j]=0
+                else:
+                    bw[i,j] = 1 if rngbw.random()<0.9 else 2
+    else:
+        rng_bw=random.Random(args.seed+3)
+        for i in range(args.procs):
+            for j in range(args.procs):
+                if i==j: bw[i,j]=0
+                else: bw[i,j]=1 if rng_bw.random()<0.9 else 2
 
     write_connectivity(args.prefix, args.tasks, edges)
     write_exec(args.prefix, exec_mat)
