@@ -1,8 +1,8 @@
 <table>
   <tr>
-    <td style="vertical-align: top; padding-right:16px;">
-      <img src="assets/ufu_logo.png" alt="UFU" height="72" style="display:block; margin-bottom:8px;" />
-      <img src="assets/facom_logo.png" alt="FACOM" height="72" style="display:block;" />
+    <td style="vertical-align: top; padding-right:18px;">
+      <img src="assets/ufu_logo.png" alt="UFU" height="120" style="display:block; margin-bottom:10px;" />
+      <img src="assets/facom_logo.png" alt="FACOM" height="120" style="display:block;" />
     </td>
     <td style="vertical-align: top;">
       <h1>Scheduling Algorithms for Heterogeneous GPU Task Graphs</h1>
