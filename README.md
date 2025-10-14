@@ -5,7 +5,7 @@
       <img src="assets/facom_logo.png" alt="FACOM" height="120" style="display:block;" />
     </td>
     <td style="vertical-align: top;">
-      <h1>Scheduling Algorithms for Heterogeneous GPU Task Graphs</h1>
+      <h1>Scheduling Algorithms Benchmark for Heterogeneous GPU</h1>
       <p>Baseline, paper‑faithful Python implementations of six classic/illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous processing element) systems.</p>
       <p><strong>Academic context:</strong> This work corresponds to academic research and was presented as the final project submitted to obtaining my Bachelor degree at Federal University of Uberlândia(UFU), Computer Science Faculty (FACOM).</p>
     </td>
