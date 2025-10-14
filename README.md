@@ -1,19 +1,16 @@
-<div align="center">
-
-# Scheduling Algorithms for Heterogeneous GPU Task Graphs
-
-Baseline, paper-faithful Python implementations of six classic / illustrative heterogeneous DAG scheduling heuristics for mapping large	 training or pipeline workloads onto multi‑GPU (heterogeneous PE) systems. This research was presented as the final project for the Bachelor in Computer Science degree at Universidade Federal de Uberlândia (UFU), Faculdade de Computação (FACOM).
-
-</div>
-<p align="center">
-  <img src="assets/ufu_logo.png" alt="UFU" height="60" style="margin-right:18px;" />
-  <img src="assets/facom_logo.png" alt="FACOM" height="60" />
-</p>
-
-This repository contains baseline, paper‑faithful Python implementations of six classic/illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous processing element) systems.
-
-Academic context: This work corresponds to academic research and was presented as the final project submitted to obtain the degree of Bachelor (Bacharelado) in Computer Science at Universidade Federal de Uberlândia (UFU), Faculdade de Computação (FACOM). The codebase is provided as a reproducible reference implementation for the experiments described in that project.
-
+<table>
+  <tr>
+    <td style="vertical-align: top; padding-right:16px;">
+      <img src="assets/ufu_logo.png" alt="UFU" height="72" style="display:block; margin-bottom:8px;" />
+      <img src="assets/facom_logo.png" alt="FACOM" height="72" style="display:block;" />
+    </td>
+    <td style="vertical-align: top;">
+      <h1>Scheduling Algorithms for Heterogeneous GPU Task Graphs</h1>
+      <p>Baseline, paper‑faithful Python implementations of six classic/illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous processing element) systems.</p>
+      <p><strong>Academic context:</strong> This work corresponds to academic research and was presented as the final project submitted to obtain the degree of Bachelor (Bacharelado) in Computer Science at Universidade Federal de Uberlândia (UFU), Faculdade de Computação (FACOM).</p>
+    </td>
+  </tr>
+</table>
 ## 1. Purpose & Scope
 This repository provides a reproducible reference to compare list‑scheduling heuristics on synthetic or real task graphs that model large model (LLM) training or data‑parallel / pipeline stages. All algorithms share a common I/O format and metric computation so differences reflect their decision logic—not instrumentation artifacts.
 Included algorithms:
