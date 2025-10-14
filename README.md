@@ -16,14 +16,13 @@ Academic context: This work corresponds to academic research and was presented a
 
 ## 1. Purpose & Scope
 This repository provides a reproducible reference to compare list‑scheduling heuristics on synthetic or real task graphs that model large model (LLM) training or data‑parallel / pipeline stages. All algorithms share a common I/O format and metric computation so differences reflect their decision logic—not instrumentation artifacts.
-
 Included algorithms:
 | Acronym | Description | Notes |
 |---------|-------------|-------|
-| HEFT | Heterogeneous Earliest Finish Time | Canonical 2002 algorithm |
-| PEFT | Predict Earliest Finish Time | OCT continuation costs |
 | DLS | Dynamic Level Scheduling (DL1) | Median‑based level scoring |
-| HEFT‑LA | 1‑level Lookahead HEFT | Educational, child EFT sum |
+| HEFT | Heterogeneous Earliest Finish Time | Canonical 2002 algorithm |
+| HEFT-LA | 1-level Lookahead HEFT | Child EFT sum |
+| PEFT | Predict Earliest Finish Time | OCT continuation costs |
 | IHEFT | Improved HEFT variant | Heterogeneity weight + stochastic crossover |
 | IPEFT | Improved PEFT variant | Dual pessimistic / critical continuation tables |
 
@@ -187,7 +186,7 @@ Metric definitions:
 * **HEFT**: Upward rank (avg exec + max succ (comm + rank)); choose proc with earliest finish via insertion.
 * **PEFT**: Precompute optimistic continuation table (OCT); rank by mean OCT row; choose proc minimizing EFT + OCT.
 * **DLS (DL1)**: Dynamic level = static level − earliest start + (median exec − exec(task, proc)); pick max each step.
-* **HEFT‑LA**: HEFT order; processor score = EFT(task, p) + Σ predicted earliest child EFT if task on p.
+* **HEFT-LA**: HEFT order; processor score = EFT(task, p) + Σ predicted earliest child EFT if task on p.
 * **IHEFT**: Modified upward rank with heterogeneity weight; stochastic crossover between best EFT and fastest local exec.
 * **IPEFT**: Dual tables (PCT worst‑case, CNCT critical successors) + slack based criticality; score = EFT + CNCT.
 
