@@ -7,10 +7,11 @@
     <td style="vertical-align: top;">
       <h1>Scheduling Algorithms for Heterogeneous GPU Task Graphs</h1>
       <p>Baseline, paper‑faithful Python implementations of six classic/illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous processing element) systems.</p>
-      <p><strong>Academic context:</strong> This work corresponds to academic research and was presented as the final project submitted to obtain the degree of Bachelor (Bacharelado) in Computer Science at Universidade Federal de Uberlândia (UFU), Faculdade de Computação (FACOM).</p>
+      <p><strong>Academic context:</strong> This work corresponds to academic research and was presented as the final project submitted to obtaining my Bachelor degree at Federal University of Uberlândia(UFU), Computer Science Faculty (FACOM).</p>
     </td>
   </tr>
 </table>
+
 ## 1. Purpose & Scope
 This repository provides a reproducible reference to compare list‑scheduling heuristics on synthetic or real task graphs that model large model (LLM) training or data‑parallel / pipeline stages. All algorithms share a common I/O format and metric computation so differences reflect their decision logic—not instrumentation artifacts.
 Included algorithms:
