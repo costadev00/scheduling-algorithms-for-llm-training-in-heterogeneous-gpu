@@ -7,7 +7,8 @@
     <td style="vertical-align: top;">
       <h1>Scheduling Algorithms Benchmark for Heterogeneous GPU</h1>
       <p>Baseline, paper‑faithful Python implementations of six classic/illustrative heterogeneous DAG scheduling heuristics for mapping large training or pipeline workloads onto multi‑GPU (heterogeneous processing element) systems.</p>
-      <p><strong>Academic context:</strong> This work corresponds to academic research and was presented as the final project submitted to obtaining my Bachelor degree at Federal University of Uberlândia(UFU), Computer Science Faculty (FACOM).</p>
+  <p><strong>Academic context:</strong> This work corresponds to academic research and was presented as the final project submitted to obtaining my Bachelor degree at Federal University of Uberlândia (UFU), Computer Science Faculty (FACOM).</p>
+  <p><strong>Full article corresponding to the final project(in pt-br):</strong> The complete write-up that accompanies this repository is available in the repository as <a href="AnaliseComparativaAlgoritmos%20(1).pdf">AnaliseComparativaAlgoritmos.pdf</a>.</p>
     </td>
   </tr>
 </table>
